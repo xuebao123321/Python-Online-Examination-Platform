@@ -114,39 +114,10 @@ def page_login():
                     st.session_state.show_register = True
                     st.rerun()
 
-            # 应急恢复
+            # 应急恢复（仅清空数据库）
             with st.expander("🔧 忘记密码？", expanded=False):
-                st.markdown("##### 🔍 查看所有用户")
-                st.caption("输入恢复密钥查看当前存在的账号")
-                list_key = st.text_input("恢复密钥", type="password", key="list_key")
-                recovery_key = st.secrets.get("recovery_key", "python2026")
-                if st.button("👁️ 查看用户列表", use_container_width=True):
-                    if list_key == recovery_key:
-                        users = db.get_all_users()
-                        if users:
-                            data = [{"用户名": u['username'], "显示名": u['display_name'], "角色": u['role'], "校区ID": u.get('campus_id','')} for u in users]
-                            st.dataframe(data, use_container_width=True, hide_index=True)
-                        else:
-                            st.info("数据库中没有用户（空数据库）")
-                    else:
-                        st.error("恢复密钥错误")
-
-                st.divider()
-                st.markdown("##### 🔄 重置单个用户密码")
-                st.caption("输入恢复密钥，直接修改指定用户的密码。")
-                reset_user = st.text_input("要重置的用户名", key="reset_user")
-                reset_key = st.text_input("恢复密钥", type="password", key="reset_key")
-                reset_pwd = st.text_input("新密码", type="password", key="reset_pwd")
-                if st.button("🔄 重置密码", use_container_width=True):
-                    ok, msg = auth.reset_password(reset_user, reset_pwd, reset_key, recovery_key)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-
-                st.divider()
-                st.markdown("##### 💣 清空所有数据")
                 st.warning("⚠️ 此操作将清空所有用户数据，题库不受影响。")
+                st.caption("联系超级管理员重置密码，或在确认无法恢复时使用此功能。")
                 reset_confirm = st.text_input("输入「确认重置」来启用按钮", key="reset_confirm")
                 if reset_confirm == "确认重置":
                     if st.button("💣 清空所有用户数据", type="secondary", use_container_width=True):
@@ -904,6 +875,53 @@ def page_admin_records():
             st.divider()
 
 
+# ==================== 超级管理员：用户管理 ====================
+
+def page_admin_users():
+    st.title("🔧 用户管理")
+    st.caption("查看所有用户、重置密码")
+
+    recovery_key = st.secrets.get("recovery_key", "python2026")
+
+    # 用户列表
+    st.subheader("👁️ 所有用户")
+    users = db.get_all_users()
+    if users:
+        data = [{
+            "用户名": u['username'], "显示名": u['display_name'],
+            "角色": "超级管理员" if (u['role']=='admin' and u.get('campus_id') is None)
+                    else ("校区管理员" if u['role']=='admin' else "学生"),
+            "校区ID": u.get('campus_id', '全部'),
+            "注册时间": u['created_at']
+        } for u in users]
+        st.dataframe(data, use_container_width=True, hide_index=True)
+    else:
+        st.info("还没有用户")
+
+    st.divider()
+
+    # 重置密码
+    st.subheader("🔄 重置用户密码")
+    st.caption("忘记密码时，超级管理员可在此重置")
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        reset_user = st.text_input("用户名", key="admin_reset_user")
+    with col_b:
+        reset_pwd = st.text_input("新密码", type="password", key="admin_reset_pwd")
+    with col_c:
+        st.caption("")  # spacer
+        st.caption("")
+        if st.button("🔄 重置密码", use_container_width=True, type="primary"):
+            if reset_user and reset_pwd:
+                ok, msg = auth.reset_password(reset_user, reset_pwd, recovery_key, recovery_key)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+            else:
+                st.error("请输入用户名和新密码")
+
+
 # ==================== 超级管理员：校区管理 ====================
 
 def page_admin_campuses():
@@ -994,7 +1012,7 @@ def main():
 
         # 导航菜单按角色
         if is_super_admin:
-            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "📤 上传题库", "📜 全部记录"]
+            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "🔧 用户管理", "📤 上传题库", "📜 全部记录"]
         elif is_admin:
             pages = ["📊 仪表盘", "👥 学生管理", "📤 上传题库", "📜 全部记录"]
         else:
@@ -1071,6 +1089,8 @@ def main():
         page_admin_student_detail()
     elif page == "📤 上传题库":
         page_admin_upload()
+    elif page == "🔧 用户管理":
+        page_admin_users()
     elif page == "🏫 校区管理":
         page_admin_campuses()
     elif page == "📜 全部记录":
