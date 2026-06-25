@@ -114,10 +114,23 @@ def page_login():
                     st.session_state.show_register = True
                     st.rerun()
 
-            # 应急恢复：忘记密码时重置数据库
+            # 应急恢复
             with st.expander("🔧 忘记密码？", expanded=False):
+                st.markdown("##### 🔄 重置单个用户密码")
+                st.caption("输入恢复密钥，直接修改指定用户的密码。")
+                reset_user = st.text_input("要重置的用户名", key="reset_user")
+                reset_key = st.text_input("恢复密钥", type="password", key="reset_key")
+                reset_pwd = st.text_input("新密码", type="password", key="reset_pwd")
+                if st.button("🔄 重置密码", use_container_width=True):
+                    ok, msg = auth.reset_password(reset_user, reset_pwd, reset_key)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+
+                st.divider()
+                st.markdown("##### 💣 清空所有数据")
                 st.warning("⚠️ 此操作将清空所有用户数据，题库不受影响。")
-                st.caption("如果你忘记了所有管理员密码，可以重置数据库重新注册。")
                 reset_confirm = st.text_input("输入「确认重置」来启用按钮", key="reset_confirm")
                 if reset_confirm == "确认重置":
                     if st.button("💣 清空所有用户数据", type="secondary", use_container_width=True):

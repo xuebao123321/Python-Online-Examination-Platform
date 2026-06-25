@@ -155,6 +155,19 @@ def get_user_by_username(username):
     return dict(row) if row else None
 
 
+def reset_user_password(username, password_hash, salt):
+    """重置用户密码"""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE users SET password_hash = ?, salt = ? WHERE username = ?",
+        (password_hash, salt, username)
+    )
+    conn.commit()
+    affected = conn.total_changes
+    conn.close()
+    return affected > 0
+
+
 def get_user_by_id(user_id):
     """根据 ID 查找用户"""
     conn = get_conn()

@@ -85,3 +85,22 @@ def login_user(username, password):
         return False, "密码错误", None
 
     return True, f"登录成功！欢迎回来，{user['display_name']}！", user
+
+
+def reset_password(username, new_password, recovery_key):
+    """
+    应急密码重置。需要正确的恢复密钥。
+    恢复密钥: 'python2026' (系统所有者使用)
+    """
+    if recovery_key != 'python2026':
+        return False, "恢复密钥错误"
+
+    user = db.get_user_by_username(username)
+    if not user:
+        return False, "用户名不存在"
+
+    pwd_hash, salt = hash_password(new_password)
+    ok = db.reset_user_password(username, pwd_hash, salt)
+    if ok:
+        return True, f"✅ 用户「{username}」密码已重置"
+    return False, "重置失败"
