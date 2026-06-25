@@ -87,12 +87,11 @@ def login_user(username, password):
     return True, f"登录成功！欢迎回来，{user['display_name']}！", user
 
 
-def reset_password(username, new_password, recovery_key):
+def reset_password(username, new_password, recovery_key, valid_key):
     """
-    应急密码重置。需要正确的恢复密钥。
-    恢复密钥: 'python2026' (系统所有者使用)
+    应急密码重置。valid_key 从外部传入（st.secrets）。
     """
-    if recovery_key != 'python2026':
+    if recovery_key != valid_key:
         return False, "恢复密钥错误"
 
     user = db.get_user_by_username(username)

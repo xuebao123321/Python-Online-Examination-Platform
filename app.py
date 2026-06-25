@@ -116,13 +116,29 @@ def page_login():
 
             # 应急恢复
             with st.expander("🔧 忘记密码？", expanded=False):
+                st.markdown("##### 🔍 查看所有用户")
+                st.caption("输入恢复密钥查看当前存在的账号")
+                list_key = st.text_input("恢复密钥", type="password", key="list_key")
+                recovery_key = st.secrets.get("recovery_key", "python2026")
+                if st.button("👁️ 查看用户列表", use_container_width=True):
+                    if list_key == recovery_key:
+                        users = db.get_all_users()
+                        if users:
+                            data = [{"用户名": u['username'], "显示名": u['display_name'], "角色": u['role'], "校区ID": u.get('campus_id','')} for u in users]
+                            st.dataframe(data, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("数据库中没有用户（空数据库）")
+                    else:
+                        st.error("恢复密钥错误")
+
+                st.divider()
                 st.markdown("##### 🔄 重置单个用户密码")
                 st.caption("输入恢复密钥，直接修改指定用户的密码。")
                 reset_user = st.text_input("要重置的用户名", key="reset_user")
                 reset_key = st.text_input("恢复密钥", type="password", key="reset_key")
                 reset_pwd = st.text_input("新密码", type="password", key="reset_pwd")
                 if st.button("🔄 重置密码", use_container_width=True):
-                    ok, msg = auth.reset_password(reset_user, reset_pwd, reset_key)
+                    ok, msg = auth.reset_password(reset_user, reset_pwd, reset_key, recovery_key)
                     if ok:
                         st.success(msg)
                     else:
