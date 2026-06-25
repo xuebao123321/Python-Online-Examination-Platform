@@ -621,6 +621,7 @@ def _do_import(bank_id, questions, bank_name):
 
 def page_admin_dashboard():
     st.title("📊 管理员仪表盘")
+    campus_id = st.session_state.user.get('campus_id')
     stats = db.get_admin_stats(campus_id)
 
     # 概览指标
@@ -681,7 +682,7 @@ def page_admin_dashboard():
 
 def page_admin_students():
     st.title("👥 学生管理")
-    students = db.get_all_students(campus_id)
+    students = db.get_all_students(st.session_state.user.get('campus_id'))
 
     if not students:
         st.info("还没有注册的学生账号。")
@@ -777,7 +778,7 @@ def page_admin_student_detail():
 def page_admin_records():
     """管理员查看所有考试记录"""
     st.title("📜 全部考试记录")
-    attempts = db.get_attempts(campus_id=campus_id)
+    attempts = db.get_attempts(campus_id=st.session_state.user.get('campus_id'))
 
     if not attempts:
         st.info("还没有考试记录。")
