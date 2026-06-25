@@ -113,6 +113,26 @@ def page_login():
                 if st.button("还没有账号？去注册", use_container_width=True):
                     st.session_state.show_register = True
                     st.rerun()
+
+            # 应急恢复：忘记密码时重置数据库
+            with st.expander("🔧 忘记密码？", expanded=False):
+                st.warning("⚠️ 此操作将清空所有用户数据，题库不受影响。")
+                st.caption("如果你忘记了所有管理员密码，可以重置数据库重新注册。")
+                reset_confirm = st.text_input("输入「确认重置」来启用按钮", key="reset_confirm")
+                if reset_confirm == "确认重置":
+                    if st.button("💣 清空所有用户数据", type="secondary", use_container_width=True):
+                        import sqlite3
+                        conn = sqlite3.connect(db.DB_PATH)
+                        conn.execute("DELETE FROM answers")
+                        conn.execute("DELETE FROM exam_attempts")
+                        conn.execute("DELETE FROM users")
+                        conn.execute("DELETE FROM campuses")
+                        conn.commit()
+                        conn.close()
+                        db.init_db()
+                        st.success("✅ 用户数据已清空！请重新注册超级管理员。")
+                        time.sleep(1.5)
+                        st.rerun()
         else:
             # ---- 注册 ----
             st.subheader("📝 注册新账号")
