@@ -120,9 +120,22 @@ def page_login():
             reg_pwd = st.text_input("密码", type="password", placeholder="至少4个字符", key="reg_pwd")
             reg_pwd2 = st.text_input("确认密码", type="password", placeholder="再次输入密码", key="reg_pwd2")
             reg_display = st.text_input("显示名称", placeholder="你的姓名或昵称", key="reg_display")
-            reg_role = st.selectbox("角色", ["student", "admin"],
-                                    format_func=lambda x: "👨‍🎓 学生" if x == "student" else "👩‍🏫 管理员",
+            reg_role = st.selectbox("角色", ["student", "admin", "super_admin"],
+                                    format_func=lambda x: "👨‍🎓 学生" if x == "student" else ("👩‍🏫 校区管理员" if x == "admin" else "🔑 超级管理员"),
                                     key="reg_role")
+
+            # 校区选择（非超级管理员需要选校区）
+            reg_campus_id = None
+            if reg_role != "super_admin":
+                campuses = db.get_all_campuses()
+                if not campuses:
+                    st.warning("⚠️ 还没有校区，请联系超级管理员创建校区")
+                else:
+                    campus_options = {c['name']: c['id'] for c in campuses}
+                    selected_campus = st.selectbox("选择校区", list(campus_options.keys()), key="reg_campus")
+                    reg_campus_id = campus_options[selected_campus]
+            else:
+                st.info("🔑 超级管理员可以管理所有校区，无需选择校区")
 
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
@@ -130,7 +143,8 @@ def page_login():
                     if reg_pwd != reg_pwd2:
                         st.error("两次输入的密码不一致")
                     else:
-                        success, msg, uid = auth.register_user(reg_user, reg_pwd, reg_role, reg_display)
+                        role = "admin" if reg_role == "super_admin" else reg_role
+                        success, msg, uid = auth.register_user(reg_user, reg_pwd, role, reg_display, reg_campus_id)
                         if success:
                             st.success(msg)
                             st.session_state.show_register = False
@@ -607,7 +621,7 @@ def _do_import(bank_id, questions, bank_name):
 
 def page_admin_dashboard():
     st.title("📊 管理员仪表盘")
-    stats = db.get_admin_stats()
+    stats = db.get_admin_stats(campus_id)
 
     # 概览指标
     st.subheader("📈 整体概览")
@@ -667,7 +681,7 @@ def page_admin_dashboard():
 
 def page_admin_students():
     st.title("👥 学生管理")
-    students = db.get_all_students()
+    students = db.get_all_students(campus_id)
 
     if not students:
         st.info("还没有注册的学生账号。")
@@ -763,7 +777,7 @@ def page_admin_student_detail():
 def page_admin_records():
     """管理员查看所有考试记录"""
     st.title("📜 全部考试记录")
-    attempts = db.get_attempts()  # 无 user_id 限制
+    attempts = db.get_attempts(campus_id=campus_id)
 
     if not attempts:
         st.info("还没有考试记录。")
@@ -801,6 +815,57 @@ def page_admin_records():
             st.divider()
 
 
+# ==================== 超级管理员：校区管理 ====================
+
+def page_admin_campuses():
+    st.title("🏫 校区管理")
+
+    user = st.session_state.user
+    if not (user['role'] == 'admin' and user.get('campus_id') is None):
+        st.error("仅超级管理员可访问")
+        return
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        new_campus = st.text_input("新建校区名称", placeholder="例如：北京校区、上海校区")
+        if st.button("➕ 创建校区", type="primary"):
+            if new_campus.strip():
+                cid = db.create_campus(new_campus.strip())
+                if cid:
+                    st.success(f"✅ 校区「{new_campus.strip()}」创建成功！")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error("校区名称已存在")
+            else:
+                st.error("请输入校区名称")
+
+    st.divider()
+    st.subheader("📋 已有校区")
+    campuses = db.get_all_campuses()
+    if not campuses:
+        st.info("还没有校区，请创建第一个校区。")
+    else:
+        for c in campuses:
+            # 统计该校区人数
+            students = db.get_all_students(c['id'])
+            admins = [u for u in db.get_all_users(c['id']) if u['role'] == 'admin']
+            with st.container():
+                cc1, cc2, cc3, cc4 = st.columns([3, 1, 1, 1])
+                with cc1:
+                    st.markdown(f"**🏫 {c['name']}**")
+                    st.caption(f"创建于 {c['created_at']}")
+                with cc2:
+                    st.metric("👨‍🎓 学生", len(students))
+                with cc3:
+                    st.metric("👩‍🏫 管理员", len(admins))
+                with cc4:
+                    if st.button("🗑️ 删除", key=f"del_campus_{c['id']}", use_container_width=True):
+                        db.delete_campus(c['id'])
+                        st.rerun()
+                st.divider()
+
+
 # ==================== 主程序 ====================
 
 def main():
@@ -811,15 +876,37 @@ def main():
 
     user = st.session_state.user
     is_admin = user['role'] == 'admin'
+    is_super_admin = is_admin and user.get('campus_id') is None
+    campus_id = user.get('campus_id')  # None for super admin, int for campus admin/student
 
     # ---- 侧边栏 ----
     with st.sidebar:
         st.markdown(f"# 🐍 考试系统")
-        st.markdown(f"**{'👩‍🏫 管理员' if is_admin else '👨‍🎓 学生'}**：{user['display_name']}")
+
+        # 显示身份
+        if is_super_admin:
+            role_label = "🔑 超级管理员"
+        elif is_admin:
+            role_label = "👩‍🏫 校区管理员"
+        else:
+            role_label = "👨‍🎓 学生"
+        st.markdown(f"**{role_label}**：{user['display_name']}")
         st.markdown(f"@{user['username']}")
+
+        # 显示所属校区
+        if campus_id:
+            campus = db.get_campus_by_id(campus_id)
+            if campus:
+                st.caption(f"🏫 {campus['name']}")
+        elif is_super_admin:
+            st.caption("🏫 全部校区")
+
         st.markdown("---")
 
-        if is_admin:
+        # 导航菜单按角色
+        if is_super_admin:
+            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "📤 上传题库", "📜 全部记录"]
+        elif is_admin:
             pages = ["📊 仪表盘", "👥 学生管理", "📤 上传题库", "📜 全部记录"]
         else:
             pages = ["📝 参加考试", "📊 考试结果", "📜 历史记录", "❌ 错题本"]
@@ -828,7 +915,6 @@ def main():
                                 index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
                                 label_visibility="collapsed")
 
-        # 切换页面时处理考试状态
         if current_page != st.session_state.page:
             if st.session_state.exam_state == "in_progress" and not is_admin:
                 st.warning("⚠️ 离开将丢失当前考试进度！")
@@ -841,7 +927,7 @@ def main():
                 st.session_state.page = current_page
                 st.rerun()
 
-        # 管理员专属：数据备份恢复
+        # 管理员备份功能
         if is_admin:
             st.markdown("---")
             st.markdown("💾 **数据管理**")
@@ -896,6 +982,8 @@ def main():
         page_admin_student_detail()
     elif page == "📤 上传题库":
         page_admin_upload()
+    elif page == "🏫 校区管理":
+        page_admin_campuses()
     elif page == "📜 全部记录":
         page_admin_records()
 

@@ -27,6 +27,14 @@ def init_db():
     cursor = conn.cursor()
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS campuses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS question_banks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -62,7 +70,9 @@ def init_db():
             salt TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'student',
             display_name TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            campus_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (campus_id) REFERENCES campuses(id)
         )
     """)
 
@@ -99,13 +109,13 @@ def init_db():
 
 # ==================== 用户操作 ====================
 
-def create_user(username, password_hash, salt, role, display_name):
+def create_user(username, password_hash, salt, role, display_name, campus_id=None):
     """创建用户，返回 user_id"""
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO users (username, password_hash, salt, role, display_name, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (username, password_hash, salt, role, display_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        "INSERT INTO users (username, password_hash, salt, role, display_name, campus_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (username, password_hash, salt, role, display_name, campus_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     )
     conn.commit()
     uid = cursor.lastrowid
@@ -129,22 +139,79 @@ def get_user_by_id(user_id):
     return dict(row) if row else None
 
 
-def get_all_students():
-    """获取所有学生用户"""
+# ==================== 校区操作 ====================
+
+def create_campus(name):
+    """创建校区"""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM users WHERE role = 'student' ORDER BY created_at DESC"
-    ).fetchall()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO campuses (name, created_at) VALUES (?, ?)",
+            (name.strip(), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        conn.commit()
+        cid = cursor.lastrowid
+        conn.close()
+        return cid
+    except sqlite3.IntegrityError:
+        conn.close()
+        return None
+
+
+def get_all_campuses():
+    """获取所有校区"""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM campuses ORDER BY created_at DESC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def get_all_users():
-    """获取所有用户"""
+def get_campus_by_id(campus_id):
+    """获取单个校区"""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM users ORDER BY role, created_at DESC"
-    ).fetchall()
+    row = conn.execute("SELECT * FROM campuses WHERE id = ?", (campus_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_campus(campus_id):
+    """删除校区（需要先处理关联用户）"""
+    conn = get_conn()
+    conn.execute("UPDATE users SET campus_id = NULL WHERE campus_id = ?", (campus_id,))
+    conn.execute("DELETE FROM campuses WHERE id = ?", (campus_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_all_students(campus_id=None):
+    """获取学生用户。campus_id=None 返回全部"""
+    conn = get_conn()
+    if campus_id:
+        rows = conn.execute(
+            "SELECT * FROM users WHERE role = 'student' AND campus_id = ? ORDER BY created_at DESC",
+            (campus_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM users WHERE role = 'student' ORDER BY created_at DESC"
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_users(campus_id=None):
+    """获取所有用户，可按校区过滤"""
+    conn = get_conn()
+    if campus_id:
+        rows = conn.execute(
+            "SELECT * FROM users WHERE campus_id = ? ORDER BY role, created_at DESC",
+            (campus_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM users ORDER BY role, created_at DESC"
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -367,8 +434,8 @@ def abandon_attempt(attempt_id):
     conn.close()
 
 
-def get_attempts(user_id=None):
-    """获取考试记录。user_id=None 返回全部（管理员），否则返回指定用户的"""
+def get_attempts(user_id=None, campus_id=None):
+    """获取考试记录。支持按用户或校区过滤"""
     conn = get_conn()
     if user_id:
         rows = conn.execute(
@@ -378,6 +445,16 @@ def get_attempts(user_id=None):
                WHERE ea.submitted_at IS NOT NULL AND ea.user_id = ?
                ORDER BY ea.submitted_at DESC""",
             (user_id,)
+        ).fetchall()
+    elif campus_id:
+        rows = conn.execute(
+            """SELECT ea.*, qb.name as bank_name, qb.level, qb.year, u.display_name as user_name
+               FROM exam_attempts ea
+               JOIN question_banks qb ON ea.bank_id = qb.id
+               JOIN users u ON ea.user_id = u.id
+               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?
+               ORDER BY ea.submitted_at DESC""",
+            (campus_id,)
         ).fetchall()
     else:
         rows = conn.execute(
@@ -409,48 +486,87 @@ def get_wrong_questions(user_id, limit=50):
     return [dict(r) for r in rows]
 
 
-def get_admin_stats():
-    """获取管理员仪表盘统计数据"""
+def get_admin_stats(campus_id=None):
+    """获取管理员仪表盘统计数据，可按校区过滤"""
     conn = get_conn()
 
-    total_students = conn.execute(
-        "SELECT COUNT(*) as cnt FROM users WHERE role = 'student'"
-    ).fetchone()['cnt']
-
-    total_exams = conn.execute(
-        "SELECT COUNT(*) as cnt FROM exam_attempts WHERE submitted_at IS NOT NULL"
-    ).fetchone()['cnt']
-
-    avg_score = conn.execute(
-        "SELECT AVG(CAST(score AS FLOAT)/total*100) as avg_pct FROM exam_attempts WHERE submitted_at IS NOT NULL"
-    ).fetchone()['avg_pct']
-
-    # 每个学生的统计
-    student_stats = conn.execute(
-        """SELECT u.id, u.display_name, u.username,
-                  COUNT(ea.id) as exam_count,
-                  AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_score,
-                  MAX(ea.submitted_at) as last_exam
-           FROM users u
-           LEFT JOIN exam_attempts ea ON u.id = ea.user_id AND ea.submitted_at IS NOT NULL
-           WHERE u.role = 'student'
-           GROUP BY u.id
-           ORDER BY exam_count DESC"""
-    ).fetchall()
-
-    # 每场考试的统计
-    exam_stats = conn.execute(
-        """SELECT qb.name as bank_name, qb.level, qb.year,
-                  COUNT(ea.id) as attempt_count,
-                  AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_score,
-                  MAX(ea.score*1.0/ea.total*100) as best_score,
-                  MIN(ea.score*1.0/ea.total*100) as worst_score
-           FROM exam_attempts ea
-           JOIN question_banks qb ON ea.bank_id = qb.id
-           WHERE ea.submitted_at IS NOT NULL
-           GROUP BY qb.id
-           ORDER BY qb.level, qb.year DESC"""
-    ).fetchall()
+    if campus_id:
+        total_students = conn.execute(
+            "SELECT COUNT(*) as cnt FROM users WHERE role = 'student' AND campus_id = ?",
+            (campus_id,)
+        ).fetchone()['cnt']
+        total_exams = conn.execute(
+            """SELECT COUNT(*) as cnt FROM exam_attempts ea
+               JOIN users u ON ea.user_id = u.id
+               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?""",
+            (campus_id,)
+        ).fetchone()['cnt']
+        avg_score = conn.execute(
+            """SELECT AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_pct
+               FROM exam_attempts ea
+               JOIN users u ON ea.user_id = u.id
+               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?""",
+            (campus_id,)
+        ).fetchone()['avg_pct']
+        student_stats = conn.execute(
+            """SELECT u.id, u.display_name, u.username,
+                      COUNT(ea.id) as exam_count,
+                      AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_score,
+                      MAX(ea.submitted_at) as last_exam
+               FROM users u
+               LEFT JOIN exam_attempts ea ON u.id = ea.user_id AND ea.submitted_at IS NOT NULL
+               WHERE u.role = 'student' AND u.campus_id = ?
+               GROUP BY u.id
+               ORDER BY exam_count DESC""",
+            (campus_id,)
+        ).fetchall()
+        exam_stats = conn.execute(
+            """SELECT qb.name as bank_name, qb.level, qb.year,
+                      COUNT(ea.id) as attempt_count,
+                      AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_score,
+                      MAX(ea.score*1.0/ea.total*100) as best_score,
+                      MIN(ea.score*1.0/ea.total*100) as worst_score
+               FROM exam_attempts ea
+               JOIN question_banks qb ON ea.bank_id = qb.id
+               JOIN users u ON ea.user_id = u.id
+               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?
+               GROUP BY qb.id
+               ORDER BY qb.level, qb.year DESC""",
+            (campus_id,)
+        ).fetchall()
+    else:
+        total_students = conn.execute(
+            "SELECT COUNT(*) as cnt FROM users WHERE role = 'student'"
+        ).fetchone()['cnt']
+        total_exams = conn.execute(
+            "SELECT COUNT(*) as cnt FROM exam_attempts WHERE submitted_at IS NOT NULL"
+        ).fetchone()['cnt']
+        avg_score = conn.execute(
+            "SELECT AVG(CAST(score AS FLOAT)/total*100) as avg_pct FROM exam_attempts WHERE submitted_at IS NOT NULL"
+        ).fetchone()['avg_pct']
+        student_stats = conn.execute(
+            """SELECT u.id, u.display_name, u.username,
+                      COUNT(ea.id) as exam_count,
+                      AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_score,
+                      MAX(ea.submitted_at) as last_exam
+               FROM users u
+               LEFT JOIN exam_attempts ea ON u.id = ea.user_id AND ea.submitted_at IS NOT NULL
+               WHERE u.role = 'student'
+               GROUP BY u.id
+               ORDER BY exam_count DESC"""
+        ).fetchall()
+        exam_stats = conn.execute(
+            """SELECT qb.name as bank_name, qb.level, qb.year,
+                      COUNT(ea.id) as attempt_count,
+                      AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_score,
+                      MAX(ea.score*1.0/ea.total*100) as best_score,
+                      MIN(ea.score*1.0/ea.total*100) as worst_score
+               FROM exam_attempts ea
+               JOIN question_banks qb ON ea.bank_id = qb.id
+               WHERE ea.submitted_at IS NOT NULL
+               GROUP BY qb.id
+               ORDER BY qb.level, qb.year DESC"""
+        ).fetchall()
 
     conn.close()
     return {

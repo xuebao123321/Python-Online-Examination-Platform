@@ -30,39 +30,37 @@ def hash_password(password, salt=None):
     return key.hex(), salt.hex()
 
 
-def register_user(username, password, role='student', display_name=''):
+def register_user(username, password, role='student', display_name='', campus_id=None):
     """
     注册新用户。
-    返回 (success: bool, message: str, user_id: int|None)
+    campus_id=None 表示超级管理员（仅当 role='admin' 时有效）
     """
-    # 验证用户名
     username = username.strip()
     if not username or len(username) < 2:
         return False, "用户名至少需要2个字符", None
-
     if len(username) > 30:
         return False, "用户名不能超过30个字符", None
 
-    # 检查是否已存在
     existing = db.get_user_by_username(username)
     if existing:
-        return False, f"用户名「{username}」已被注册，请换一个", None
+        return False, f"用户名「{username}」已被注册", None
 
-    # 验证密码
     if not password or len(password) < 4:
         return False, "密码至少需要4个字符", None
 
-    # 验证角色
     if role not in ('student', 'admin'):
         return False, "无效的用户角色", None
 
-    # 哈希密码
-    pwd_hash, salt = hash_password(password)
+    # 非超级管理员必须选择校区
+    if role != 'admin' or campus_id is not None:
+        if campus_id is None:
+            return False, "请选择校区", None
 
-    # 创建用户
+    pwd_hash, salt = hash_password(password)
     display = display_name.strip() if display_name.strip() else username
+
     try:
-        user_id = db.create_user(username, pwd_hash, salt, role, display)
+        user_id = db.create_user(username, pwd_hash, salt, role, display, campus_id)
         return True, f"注册成功！欢迎，{display}！", user_id
     except Exception as e:
         return False, f"注册失败：{e}", None
