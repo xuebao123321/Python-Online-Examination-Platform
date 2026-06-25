@@ -579,14 +579,51 @@ def page_admin_upload():
     with col2:
         st.subheader("📚 已有题库")
         banks = db.get_all_banks()
+        user = st.session_state.user
+        is_super = user['role'] == 'admin' and user.get('campus_id') is None
+
+        # 超级管理员：待审批删除
+        if is_super:
+            delete_reqs = db.get_delete_requests()
+            if delete_reqs:
+                st.warning(f"⏳ {len(delete_reqs)} 个删除申请待审批")
+                for dr in delete_reqs:
+                    with st.container():
+                        st.markdown(f"🗑️ **{dr['name']}**")
+                        st.caption(f"申请者: {dr.get('uploader_name','?')} ｜ {dr.get('campus_name','?')}")
+                        ca, cb = st.columns(2)
+                        with ca:
+                            if st.button("✅ 同意删除", key=f"approve_{dr['id']}"):
+                                db.approve_delete_bank(dr['id'])
+                                st.rerun()
+                        with cb:
+                            if st.button("❌ 拒绝", key=f"reject_{dr['id']}"):
+                                db.reject_delete_bank(dr['id'])
+                                st.rerun()
+                        st.divider()
+                st.divider()
+
         if banks:
             for b in banks:
                 count = db.get_question_count(b["id"])
-                st.markdown(f"**{b['name']}**  [{count}题]")
-                st.caption(f"导入: {b['created_at']}")
-                if st.button("🗑️ 删除", key=f"del_{b['id']}"):
-                    db.delete_bank(b["id"])
-                    st.rerun()
+                status = ""
+                if b.get('delete_requested') == 1:
+                    status = " ⏳(待审批删除)"
+                st.markdown(f"**{b['name']}**  [{count}题]{status}")
+                st.caption(f"上传者: {b.get('uploader_name','?')} ｜ 校区: {b.get('campus_name','?')} ｜ {b['created_at']}")
+
+                # 删除 / 申请删除
+                if is_super:
+                    if st.button("🗑️ 删除", key=f"del_{b['id']}"):
+                        db.delete_bank(b["id"])
+                        st.rerun()
+                else:
+                    if b.get('delete_requested', 0) == 0:
+                        if st.button("📩 申请删除", key=f"req_del_{b['id']}"):
+                            db.request_delete_bank(b['id'])
+                            st.success("已提交删除申请，等待超级管理员审批")
+                            time.sleep(1)
+                            st.rerun()
                 st.divider()
         else:
             st.info("还没有题库")
@@ -605,18 +642,20 @@ def page_admin_upload():
             return
         existing = db.get_bank_by_level_year(level.strip(), year)
         bank_name = f"{level.strip()} {year}"
+        uid = user['id']
+        cid = user.get('campus_id')
         if existing:
             st.warning(f"题库「{bank_name}」已存在，将替换原有题目。")
             c_a, c_b = st.columns(2)
             with c_a:
                 if st.button("✅ 确认替换", type="primary"):
-                    db.replace_bank(existing["id"], bank_name, level.strip(), year)
+                    db.replace_bank(existing["id"], bank_name, level.strip(), year, uid, cid)
                     _do_import(existing["id"], questions, bank_name)
             with c_b:
                 if st.button("❌ 取消"):
                     st.rerun()
         else:
-            bank_id = db.create_bank(bank_name, level.strip(), year)
+            bank_id = db.create_bank(bank_name, level.strip(), year, uid, cid)
             if bank_id:
                 _do_import(bank_id, questions, bank_name)
             else:

@@ -40,8 +40,13 @@ def init_db():
             name TEXT NOT NULL,
             level TEXT NOT NULL,
             year TEXT NOT NULL,
+            uploader_id INTEGER,
+            campus_id INTEGER,
             created_at TEXT NOT NULL,
-            UNIQUE(level, year)
+            delete_requested INTEGER DEFAULT 0,
+            UNIQUE(level, year),
+            FOREIGN KEY (uploader_id) REFERENCES users(id),
+            FOREIGN KEY (campus_id) REFERENCES campuses(id)
         )
     """)
 
@@ -112,6 +117,15 @@ def init_db():
     cols2 = [c[1] for c in cursor.execute("PRAGMA table_info(exam_attempts)").fetchall()]
     if 'user_id' not in cols2:
         cursor.execute("ALTER TABLE exam_attempts ADD COLUMN user_id INTEGER REFERENCES users(id)")
+
+    # 检查 question_banks 是否有新列
+    cols3 = [c[1] for c in cursor.execute("PRAGMA table_info(question_banks)").fetchall()]
+    if 'uploader_id' not in cols3:
+        cursor.execute("ALTER TABLE question_banks ADD COLUMN uploader_id INTEGER REFERENCES users(id)")
+    if 'campus_id' not in cols3:
+        cursor.execute("ALTER TABLE question_banks ADD COLUMN campus_id INTEGER REFERENCES campuses(id)")
+    if 'delete_requested' not in cols3:
+        cursor.execute("ALTER TABLE question_banks ADD COLUMN delete_requested INTEGER DEFAULT 0")
 
     conn.commit()
     conn.close()
@@ -228,19 +242,18 @@ def get_all_users(campus_id=None):
 
 # ==================== 题库操作 ====================
 
-def create_bank(name, level, year):
+def create_bank(name, level, year, uploader_id=None, campus_id=None):
     """创建题库，返回 bank_id。如果已存在同 level+year 的题库则返回 None"""
     conn = get_conn()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO question_banks (name, level, year, created_at) VALUES (?, ?, ?, ?)",
-            (name, level, year, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            "INSERT INTO question_banks (name, level, year, uploader_id, campus_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, level, year, uploader_id, campus_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         )
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
-        # UNIQUE(level, year) 冲突
         return None
     finally:
         conn.close()
@@ -328,19 +341,68 @@ def delete_bank(bank_id):
     conn.close()
 
 
-def replace_bank(bank_id, name, level, year):
-    """替换题库：删除旧题库数据，更新基本信息"""
+def replace_bank(bank_id, name, level, year, uploader_id=None, campus_id=None):
+    """替换题库：删除旧题目数据，更新基本信息"""
     conn = get_conn()
-    # 删除旧题目
     conn.execute("DELETE FROM questions WHERE bank_id = ?", (bank_id,))
-    # 更新题库信息
     conn.execute(
-        "UPDATE question_banks SET name = ?, level = ?, year = ?, created_at = ? WHERE id = ?",
-        (name, level, year, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), bank_id)
+        "UPDATE question_banks SET name=?, level=?, year=?, uploader_id=?, campus_id=?, created_at=?, delete_requested=0 WHERE id=?",
+        (name, level, year, uploader_id, campus_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), bank_id)
     )
     conn.commit()
     conn.close()
     return bank_id
+
+
+def request_delete_bank(bank_id):
+    """校区管理员申请删除题库"""
+    conn = get_conn()
+    conn.execute("UPDATE question_banks SET delete_requested = 1 WHERE id = ?", (bank_id,))
+    conn.commit()
+    conn.close()
+
+
+def approve_delete_bank(bank_id):
+    """超级管理员确认删除题库"""
+    delete_bank(bank_id)
+
+
+def reject_delete_bank(bank_id):
+    """超级管理员拒绝删除申请"""
+    conn = get_conn()
+    conn.execute("UPDATE question_banks SET delete_requested = 0 WHERE id = ?", (bank_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_delete_requests():
+    """获取待审批的删除申请"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT qb.*, u.display_name as uploader_name, c.name as campus_name
+           FROM question_banks qb
+           LEFT JOIN users u ON qb.uploader_id = u.id
+           LEFT JOIN campuses c ON qb.campus_id = c.id
+           WHERE qb.delete_requested = 1
+           ORDER BY qb.created_at DESC"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_banks():
+    """获取所有题库列表（含上传者信息）"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT qb.*, u.display_name as uploader_name, c.name as campus_name
+           FROM question_banks qb
+           LEFT JOIN users u ON qb.uploader_id = u.id
+           LEFT JOIN campuses c ON qb.campus_id = c.id
+           WHERE qb.delete_requested < 2
+           ORDER BY qb.level, qb.year DESC"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ==================== 题目操作 ====================
