@@ -103,6 +103,16 @@ def init_db():
         )
     """)
 
+    # ---- 数据库迁移：兼容旧版本 ----
+    # 检查 users 表是否有 campus_id 列
+    cols = [c[1] for c in cursor.execute("PRAGMA table_info(users)").fetchall()]
+    if 'campus_id' not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN campus_id INTEGER REFERENCES campuses(id)")
+    # 检查 exam_attempts 表是否有 user_id 列
+    cols2 = [c[1] for c in cursor.execute("PRAGMA table_info(exam_attempts)").fetchall()]
+    if 'user_id' not in cols2:
+        cursor.execute("ALTER TABLE exam_attempts ADD COLUMN user_id INTEGER REFERENCES users(id)")
+
     conn.commit()
     conn.close()
 
