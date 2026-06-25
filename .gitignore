@@ -1,0 +1,16 @@
+# 数据库文件（包含用户数据，不上传到 GitHub）
+data/exam.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Streamlit
+.streamlit/secrets.toml
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

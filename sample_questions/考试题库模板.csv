@@ -1,0 +1,4 @@
+﻿序号,题型,题目,选项A,选项B,选项C,选项D,正确答案,解析
+1,单选,Python 中用来在屏幕上输出内容的关键字是？,print,input,if,for,A,print() 是 Python 内置的输出函数。
+2,判断,Python 是一种解释型语言。,,,,,对,Python 是解释型语言，代码逐行解释执行。
+3,单选,以下哪个是整数类型？,float,str,int,bool,C,int 表示整数类型。
