@@ -1,24 +1,43 @@
 """
 数据库操作模块
-使用 SQLite 存储题库、考试记录和答案。
+支持本地 SQLite 和 Turso 云数据库双模式。
 """
 
-import sqlite3
 import os
 from datetime import datetime
 
-# 数据库文件路径
+# 本地 SQLite 路径（Turso 未配置时使用）
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 DB_PATH = os.path.join(DB_DIR, "exam.db")
 
+# Turso 配置（从环境变量读取，Streamlit Cloud 通过 secrets 设置）
+TURSO_URL = os.environ.get("TURSO_URL", "")
+TURSO_TOKEN = os.environ.get("TURSO_TOKEN", "")
 
-def get_conn():
-    """获取数据库连接"""
+
+def _get_sqlite_conn():
+    """获取本地 SQLite 连接"""
+    import sqlite3
     os.makedirs(DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # 让查询结果可以用列名访问
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _get_turso_conn():
+    """获取 Turso 云数据库连接"""
+    import turso_adapter
+    conn = turso_adapter.TursoConnection(TURSO_URL, TURSO_TOKEN)
+    conn.row_factory = turso_adapter.TursoRow
+    return conn
+
+
+def get_conn():
+    """获取数据库连接（自动选择 Turso 或本地 SQLite）"""
+    if TURSO_URL and TURSO_TOKEN:
+        return _get_turso_conn()
+    return _get_sqlite_conn()
 
 
 def init_db():

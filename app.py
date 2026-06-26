@@ -3,9 +3,20 @@ Python 在线考试系统 — 多用户版
 支持学生和管理员两种角色。
 """
 
+import os
+
+# ---- Turso 云数据库配置（在 Streamlit 启动前设置环境变量）----
+# Streamlit Cloud 通过 secrets 设置，本地通过 .streamlit/secrets.toml
+try:
+    import streamlit as st
+    if st.secrets.get("TURSO_URL"):
+        os.environ["TURSO_URL"] = st.secrets["TURSO_URL"]
+        os.environ["TURSO_TOKEN"] = st.secrets["TURSO_TOKEN"]
+except Exception:
+    pass  # 本地开发或无 secrets 时跳过
+
 import streamlit as st
 import time
-import os
 import db
 import csv_import
 import grader
