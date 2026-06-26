@@ -769,9 +769,11 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
                 st.markdown(f"　你的答案： {given}")
                 st.markdown(f"　正确答案： {q['answer']}")
             if error_reason:
-                st.markdown(f"　错误原因： {error_reason}")
-            if q.get("explanation"):
-                st.markdown(f"💡 解析： {q['explanation']}")
+                st.markdown(f"错误原因： {error_reason}")
+            if q.get("explanation") and r["is_correct"]:
+                st.markdown(f"💡 解析： {clean_text(q['explanation'])}")
+            elif q.get("explanation") and not r["is_correct"]:
+                st.caption("🔒 解析需完成错题订正后解锁")
 
 
 # ==================== 学生：历史记录 ====================
