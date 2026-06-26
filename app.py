@@ -813,6 +813,19 @@ def page_admin_upload():
             year_months.reverse()
             year = st.selectbox("年月", year_months)
 
+        # 超级管理员需要选择目标校区
+        if is_super:
+            campuses = db.get_all_campuses()
+            if campuses:
+                campus_options = {c['name']: c['id'] for c in campuses}
+                target_campus_name = st.selectbox("目标校区（题库归属）", list(campus_options.keys()))
+                cid = campus_options[target_campus_name]
+            else:
+                st.warning("⚠️ 还没有校区，请先在「校区管理」中创建校区")
+                cid = None
+        else:
+            cid = user.get('campus_id')
+
         # 版权免责声明
         st.markdown("---")
         copyright_agreed = st.checkbox(
@@ -830,7 +843,6 @@ def page_admin_upload():
         st.subheader("📚 已有题库")
         user = st.session_state.user
         is_super = user['role'] == 'admin' and user.get('campus_id') is None
-        cid = user.get('campus_id')
 
         # 超级管理员：待审批删除
         if is_super:
