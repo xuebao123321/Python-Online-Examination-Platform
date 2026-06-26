@@ -502,7 +502,7 @@ def page_student_results():
                 for a in detail["answers"]
             ]}
             time_sec = detail.get("time_sec", 0)
-            _render_result_full(result, time_sec, detail.get("bank_name", ""), detail.get("submitted_at", ""))
+            _render_result_full(result, time_sec, detail.get("bank_name", ""), detail.get("submitted_at", ""), is_admin_view)
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("🔄 重新考试", use_container_width=True, type="primary"):
@@ -529,7 +529,7 @@ def page_student_results():
 
     # ---- 已订正完成 / 管理员查看 ----
     if exam_state == "reviewed" or is_admin_view:
-        _render_result_full(result, time_sec)
+        _render_result_full(result, time_sec, is_admin=is_admin_view)
         c1, c2 = st.columns(2)
         with c1:
             if st.button("🔄 重新考试", use_container_width=True, type="primary"):
@@ -708,8 +708,8 @@ def _submit_review():
     st.rerun()
 
 
-def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
-    """渲染完整结果（含答案和解析），管理员和学生订正后可见"""
+def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admin=False):
+    """渲染完整结果。管理员始终可见全部解析。"""
     if not result:
         st.info("暂无考试结果数据")
         return
@@ -750,11 +750,25 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
             qtype_label = {'单选': '🔵 单选题', '判断': '🟢 判断题', '编程': '💻 编程题'}.get(q['qtype'], q['qtype'])
             st.markdown(f"题型：{qtype_label}")
             st.markdown(f"题目： {clean_text(q['question'])}")
+
+            # 显示首次答题和订正状态
+            phase = q.get("phase", "first")
+            first_ans = r.get("given_answer") or q.get("given_answer", "")
+            review_ans = q.get("review_answer", "")
+            first_correct = r.get("is_correct")  # 当前最终是否正确
+
+            if phase == "review" and review_ans:
+                # 有订正记录：显示首次和订正
+                st.markdown(f"首次答案：{first_ans or '未作答'} {'✅' if False else '❌'}")
+                st.markdown(f"订正答案：{review_ans} {'✅' if first_correct else '❌'}")
+            elif q["qtype"] != "编程":
+                st.markdown(f"答案：{first_ans or given or '未作答'} {'✅' if first_correct else '❌'}")
+
             if q["qtype"] == "编程":
                 if given:
                     st.code(given, language="python")
-                if q.get("explanation"):
-                    st.markdown(f"💡 解析/参考代码：")
+                if q.get("explanation") and is_admin:
+                    st.markdown("💡 解析/参考代码：")
                     st.code(q['explanation'], language="python")
             elif q["qtype"] == "单选":
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
@@ -764,15 +778,15 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
                             mark = " ✅（正确答案）"
                         elif label == given:
                             mark = " ❌（你的答案）"
-                        st.markdown(f"　{label}) {q[key]}{mark}")
+                        st.markdown(f"{label}) {q[key]}{mark}")
             else:
-                st.markdown(f"　你的答案： {given}")
-                st.markdown(f"　正确答案： {q['answer']}")
+                st.markdown(f"正确答案： {q['answer']}")
             if error_reason:
                 st.markdown(f"错误原因： {error_reason}")
-            if q.get("explanation") and r["is_correct"]:
+            # 管理员始终可见解析，学生按规则
+            if q.get("explanation") and (is_admin or r["is_correct"]):
                 st.markdown(f"💡 解析： {clean_text(q['explanation'])}")
-            elif q.get("explanation") and not r["is_correct"]:
+            elif q.get("explanation") and not r["is_correct"] and not is_admin:
                 st.caption("🔒 解析需完成错题订正后解锁")
 
 
