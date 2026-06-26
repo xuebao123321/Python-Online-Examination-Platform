@@ -797,6 +797,9 @@ def page_admin_upload():
         st.divider()
         st.markdown("##### 🏷️ 设置题库归属")
 
+        user = st.session_state.user
+        is_super = user['role'] == 'admin' and user.get('campus_id') is None
+
         sc1, sc2 = st.columns(2)
         with sc1:
             level_options = ["电子协会一级", "电子协会二级", "电子协会三级", "其他（自定义）"]
@@ -841,8 +844,6 @@ def page_admin_upload():
 
     with col2:
         st.subheader("📚 已有题库")
-        user = st.session_state.user
-        is_super = user['role'] == 'admin' and user.get('campus_id') is None
 
         # 超级管理员：待审批删除
         if is_super:
