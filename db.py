@@ -139,8 +139,60 @@ def init_db():
     if 'delete_requested' not in cols3:
         cursor.execute("ALTER TABLE question_banks ADD COLUMN delete_requested INTEGER DEFAULT 0")
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS upload_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            campus_id INTEGER,
+            filename TEXT NOT NULL,
+            file_size INTEGER,
+            question_count INTEGER,
+            bank_name TEXT,
+            uploaded_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+# ==================== 上传日志 ====================
+
+def create_upload_log(user_id, campus_id, filename, file_size, question_count, bank_name):
+    """记录上传日志"""
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO upload_logs (user_id, campus_id, filename, file_size, question_count, bank_name, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, campus_id, filename, file_size, question_count, bank_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_upload_logs(campus_id=None, limit=200):
+    """获取上传日志（超管可看全部，校区管理员只看本校）"""
+    conn = get_conn()
+    if campus_id:
+        rows = conn.execute(
+            """SELECT ul.*, u.display_name as uploader_name, u.username
+               FROM upload_logs ul
+               JOIN users u ON ul.user_id = u.id
+               WHERE ul.campus_id = ?
+               ORDER BY ul.uploaded_at DESC LIMIT ?""",
+            (campus_id, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT ul.*, u.display_name as uploader_name, u.username, c.name as campus_name
+               FROM upload_logs ul
+               JOIN users u ON ul.user_id = u.id
+               LEFT JOIN campuses c ON ul.campus_id = c.id
+               ORDER BY ul.uploaded_at DESC LIMIT ?""",
+            (limit,)
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ==================== 用户操作 ====================
@@ -314,23 +366,35 @@ def get_bank_by_id(bank_id):
     return dict(row) if row else None
 
 
-def get_all_levels():
-    """获取所有不重复的级别列表"""
+def get_all_levels(campus_id=None):
+    """获取所有级别列表，可按校区过滤"""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT level FROM question_banks ORDER BY level"
-    ).fetchall()
+    if campus_id:
+        rows = conn.execute(
+            "SELECT DISTINCT level FROM question_banks WHERE campus_id = ? AND delete_requested < 2 ORDER BY level",
+            (campus_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT level FROM question_banks WHERE delete_requested < 2 ORDER BY level"
+        ).fetchall()
     conn.close()
     return [r["level"] for r in rows]
 
 
-def get_years_for_level(level):
-    """获取某个级别下的所有年份"""
+def get_years_for_level(level, campus_id=None):
+    """获取某个级别下的年份，可按校区过滤"""
     conn = get_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT year FROM question_banks WHERE level = ? ORDER BY year DESC",
-        (level,)
-    ).fetchall()
+    if campus_id:
+        rows = conn.execute(
+            "SELECT DISTINCT year FROM question_banks WHERE level = ? AND campus_id = ? AND delete_requested < 2 ORDER BY year DESC",
+            (level, campus_id)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT year FROM question_banks WHERE level = ? AND delete_requested < 2 ORDER BY year DESC",
+            (level,)
+        ).fetchall()
     conn.close()
     return [r["year"] for r in rows]
 
@@ -414,17 +478,28 @@ def get_delete_requests():
     return [dict(r) for r in rows]
 
 
-def get_all_banks():
-    """获取所有题库列表（含上传者信息）"""
+def get_all_banks(campus_id=None):
+    """获取题库列表，可按校区过滤。campus_id=None 返回全部（仅超管）"""
     conn = get_conn()
-    rows = conn.execute(
-        """SELECT qb.*, u.display_name as uploader_name, c.name as campus_name
-           FROM question_banks qb
-           LEFT JOIN users u ON qb.uploader_id = u.id
-           LEFT JOIN campuses c ON qb.campus_id = c.id
-           WHERE qb.delete_requested < 2
-           ORDER BY qb.level, qb.year DESC"""
-    ).fetchall()
+    if campus_id:
+        rows = conn.execute(
+            """SELECT qb.*, u.display_name as uploader_name, c.name as campus_name
+               FROM question_banks qb
+               LEFT JOIN users u ON qb.uploader_id = u.id
+               LEFT JOIN campuses c ON qb.campus_id = c.id
+               WHERE qb.delete_requested < 2 AND qb.campus_id = ?
+               ORDER BY qb.level, qb.year DESC""",
+            (campus_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT qb.*, u.display_name as uploader_name, c.name as campus_name
+               FROM question_banks qb
+               LEFT JOIN users u ON qb.uploader_id = u.id
+               LEFT JOIN campuses c ON qb.campus_id = c.id
+               WHERE qb.delete_requested < 2
+               ORDER BY qb.level, qb.year DESC"""
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

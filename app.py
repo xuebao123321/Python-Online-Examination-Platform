@@ -199,7 +199,8 @@ def page_student_exam():
 
 
 def _show_exam_selector(user):
-    levels = db.get_all_levels()
+    campus_id = user.get('campus_id')
+    levels = db.get_all_levels(campus_id)
     if not levels:
         st.info("📚 还没有题库，请联系管理员上传。")
         return
@@ -208,7 +209,7 @@ def _show_exam_selector(user):
     with col1:
         selected_level = st.selectbox("选择级别", levels)
     with col2:
-        years = db.get_years_for_level(selected_level)
+        years = db.get_years_for_level(selected_level, campus_id)
         if years:
             selected_year = st.selectbox("选择年月", years)
         else:
@@ -779,13 +780,24 @@ def page_admin_upload():
             year_months.reverse()
             year = st.selectbox("年月", year_months)
 
-        import_btn = st.button("📥 导入题库", type="primary", use_container_width=True)
+        # 版权免责声明
+        st.markdown("---")
+        copyright_agreed = st.checkbox(
+            "⚖️ **版权声明**：我确认上传的试题文件拥有完整著作权或合法授权，未上传未经授权的考试真题。"
+            "如上传内容侵犯他人知识产权，由上传方承担全部法律责任。平台有权核查、删除侵权文件并封禁账号。",
+            value=False,
+            key="copyright_agree"
+        )
+
+        import_btn = st.button("📥 导入题库", type="primary", use_container_width=True, disabled=not copyright_agreed)
+        if not copyright_agreed:
+            st.caption("⚠️ 请先阅读并同意版权声明")
 
     with col2:
         st.subheader("📚 已有题库")
-        banks = db.get_all_banks()
         user = st.session_state.user
         is_super = user['role'] == 'admin' and user.get('campus_id') is None
+        cid = user.get('campus_id')
 
         # 超级管理员：待审批删除
         if is_super:
@@ -808,8 +820,9 @@ def page_admin_upload():
                         st.divider()
                 st.divider()
 
+        banks = db.get_all_banks(None if is_super else cid)
+
         if banks:
-            for b in banks:
                 count = db.get_question_count(b["id"])
                 status = ""
                 if b.get('delete_requested') == 1:
@@ -855,22 +868,30 @@ def page_admin_upload():
             with c_a:
                 if st.button("✅ 确认替换", type="primary"):
                     db.replace_bank(existing["id"], bank_name, level.strip(), year, uid, cid)
-                    _do_import(existing["id"], questions, bank_name)
+                    _do_import(existing["id"], questions, bank_name, user, uploaded_file.name)
             with c_b:
                 if st.button("❌ 取消"):
                     st.rerun()
         else:
             bank_id = db.create_bank(bank_name, level.strip(), year, uid, cid)
             if bank_id:
-                _do_import(bank_id, questions, bank_name)
+                _do_import(bank_id, questions, bank_name, user, uploaded_file.name)
             else:
                 st.error("创建题库失败")
 
 
-def _do_import(bank_id, questions, bank_name):
+def _do_import(bank_id, questions, bank_name, user=None, filename=""):
     batch = [(q["seq"], q["qtype"], q["question"], q["option_a"], q["option_b"],
               q["option_c"], q["option_d"], q["answer"], q["explanation"]) for q in questions]
     db.insert_questions_batch(bank_id, batch)
+
+    # 记录上传审计日志
+    if user:
+        db.create_upload_log(
+            user['id'], user.get('campus_id'),
+            filename, 0, len(questions), bank_name
+        )
+
     qtype_counts = {}
     for q in questions:
         qtype_counts[q["qtype"]] = qtype_counts.get(q["qtype"], 0) + 1
@@ -1150,6 +1171,31 @@ def page_admin_users():
 
 # ==================== 超级管理员：校区管理 ====================
 
+def page_admin_audit_log():
+    """上传审计日志（仅超级管理员可见）"""
+    st.title("📋 上传日志")
+    st.caption("记录所有题库上传操作，用于版权溯源")
+
+    logs = db.get_upload_logs()
+    if not logs:
+        st.info("暂无上传记录")
+        return
+
+    data = []
+    for l in logs:
+        data.append({
+            "时间": l['uploaded_at'],
+            "上传者": l.get('uploader_name', '?'),
+            "账号": l.get('username', '?'),
+            "校区": l.get('campus_name', '全部'),
+            "文件名": l['filename'],
+            "题库名": l.get('bank_name', ''),
+            "题目数": l['question_count'],
+        })
+    st.dataframe(data, use_container_width=True, hide_index=True)
+    st.caption(f"共 {len(logs)} 条上传记录")
+
+
 def page_admin_campuses():
     st.title("🏫 校区管理")
 
@@ -1243,7 +1289,7 @@ def main():
 
         # 导航菜单按角色
         if is_super_admin:
-            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "🔧 用户管理", "📊 考试结果", "📤 上传题库", "📜 全部记录"]
+            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "🔧 用户管理", "📊 考试结果", "📤 上传题库", "📋 上传日志", "📜 全部记录"]
         elif is_admin:
             pages = ["📊 仪表盘", "👥 学生管理", "📤 上传题库", "📜 全部记录"]
         else:
@@ -1322,6 +1368,8 @@ def main():
         page_admin_upload()
     elif page == "🔧 用户管理":
         page_admin_users()
+    elif page == "📋 上传日志":
+        page_admin_audit_log()
     elif page == "🏫 校区管理":
         page_admin_campuses()
     elif page == "📜 全部记录":
