@@ -908,7 +908,7 @@ def page_admin_upload():
         existing = db.get_bank_by_level_year(level.strip(), year)
         bank_name = f"{level.strip()} {year}"
         uid = user['id']
-        cid = user.get('campus_id')
+        # cid 已在上面设置（超管从下拉框选，校区管理员从 user 取），不要覆盖！
         if existing:
             st.warning(f"题库「{bank_name}」已存在，将替换原有题目。")
             c_a, c_b = st.columns(2)
