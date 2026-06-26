@@ -856,6 +856,7 @@ def page_admin_upload():
         banks = db.get_all_banks(None if is_super else cid)
 
         if banks:
+            for b in banks:
                 count = db.get_question_count(b["id"])
                 status = ""
                 if b.get('delete_requested') == 1:
