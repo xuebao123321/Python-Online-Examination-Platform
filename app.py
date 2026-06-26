@@ -50,6 +50,7 @@ def init_session():
         "show_register": False,
         "admin_view_student": None,
         "confirm_submit": False,
+        "total_time": 3600,
         "review_idx": 0,
         "review_answers": {},
         "review_reasons": {},
@@ -281,6 +282,7 @@ def _start_exam(bank, user):
     st.session_state.current_idx = 0
     st.session_state.answers = {}
     st.session_state.start_time = time.time()
+    st.session_state.total_time = 3600  # 默认60分钟
     st.session_state.attempt_id = attempt_id
     st.rerun()
 
@@ -303,6 +305,7 @@ def _resume_exam(attempt):
     st.session_state.current_idx = 0
     st.session_state.answers = {}
     st.session_state.start_time = time.time()
+    st.session_state.total_time = 3600
     st.session_state.attempt_id = attempt["id"]
     st.rerun()
 
@@ -313,18 +316,45 @@ def _show_exam_questions():
     idx = st.session_state.current_idx
     current_q = questions[idx]
     elapsed = get_elapsed_seconds()
+    total_seconds = st.session_state.get("total_time", 3600)  # 默认60分钟
+    remaining = max(0, total_seconds - elapsed)
     answered_count = len([a for a in st.session_state.answers.values() if a and a.strip() and a.strip() != '# 在此编写 Python 代码\n'])
 
-    # 顶部状态栏
-    ct1, ct2, ct3, ct4 = st.columns([2, 1, 1, 1])
-    with ct1:
-        st.progress((idx + 1) / total, f"第 {idx + 1} / {total} 题")
-    with ct2:
-        st.metric("已答", f"{answered_count}/{total}")
-    with ct3:
-        st.metric("⏱️ 用时", format_time(elapsed))
-    with ct4:
-        st.metric("⏳ 剩余", format_time(max(0, total * 60 - elapsed)))
+    # ⏱️ 倒计时（红色警告 < 5分钟）
+    if remaining <= 300:
+        timer_color = "red"
+        timer_icon = "🔴"
+    elif remaining <= 600:
+        timer_color = "orange"
+        timer_icon = "🟡"
+    else:
+        timer_color = "green"
+        timer_icon = "🟢"
+
+    # 顶部：题号导航 + 时间
+    st.markdown(f"##### 📋 答题卡（点击题号跳转）")
+    nav_cols = st.columns(min(total, 20))  # 每行最多20题
+    for i in range(total):
+        col_idx = i % 20
+        with nav_cols[col_idx]:
+            qid = questions[i]["id"]
+            answered = bool(st.session_state.answers.get(qid, "").strip().replace("# 在此编写 Python 代码\n", ""))
+            if i == idx:
+                label = f"**{i+1}**"
+                btn_type = "primary"
+            elif answered:
+                label = f"✅{i+1}"
+                btn_type = "secondary"
+            else:
+                label = f"○{i+1}"
+                btn_type = "secondary"
+            if st.button(label, key=f"nav_{i}", use_container_width=True, type=btn_type):
+                st.session_state.current_idx = i
+                st.rerun()
+
+    st.markdown(f"**:{timer_color}[{timer_icon} 剩余 {format_time(remaining)}]** ｜ "
+                f"已答 {answered_count}/{total} ｜ 共 {format_time(total_seconds)}")
+
     st.divider()
 
     # 题目
