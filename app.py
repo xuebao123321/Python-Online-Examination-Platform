@@ -581,7 +581,7 @@ def page_student_results():
                     if q.get("explanation"):
                         st.markdown(f"💡 解析：{clean_text(q['explanation'])}")
                 else:
-                    st.error("❌ 作答错误（正确答案和正确答案和解析需完成错题订正后解锁）")
+                    st.error("❌ 作答错误（正确答案和解析需完成错题订正后解锁）")
 
     st.divider()
 
@@ -762,11 +762,10 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
             first_correct = r.get("is_correct")  # 当前最终是否正确
 
             if phase == "review" and review_ans:
-                # 有订正记录：显示首次和订正
-                st.markdown(f"首次作答：{first_ans or '未作答'} {'✅' if False else '❌'}")
-                st.markdown(f"订正作答：{review_ans} {'✅' if first_correct else '❌'}")
+                st.markdown(f"首次学生作答：{first_ans or '未作答'}")
+                st.markdown(f"订正学生作答：{review_ans} {'✅' if first_correct else '❌'}")
             elif q["qtype"] != "编程":
-                st.markdown(f"作答：{first_ans or given or '未作答'} {'✅' if first_correct else '❌'}")
+                st.markdown(f"学生作答：{first_ans or given or '未作答'} {'✅' if first_correct else '❌'}")
 
             if q["qtype"] == "编程":
                 if given:
@@ -775,23 +774,34 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
                     st.markdown("💡 解析/参考代码：")
                     st.code(q['explanation'], language="python")
             elif q["qtype"] == "单选":
+                # 管理员或答对时显示正确选项标记
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
                     if q.get(key):
                         mark = ""
-                        if label == q["answer"]:
-                            mark = " ✅（正确答案）"
+                        if is_admin or r["is_correct"]:
+                            if label == q["answer"]:
+                                mark = " ✅（正确答案）"
+                            elif label == given:
+                                mark = " ❌（学生作答）"
                         elif label == given:
-                            mark = " ❌（学生作答）"
+                            mark = " ← 学生作答"
                         st.markdown(f"{label}) {q[key]}{mark}")
             else:
-                st.markdown(f"正确作答： {q['answer']}")
+                if is_admin or r["is_correct"]:
+                    st.markdown(f"正确答案：{q['answer']}")
+
             if error_reason:
-                st.markdown(f"错误原因： {error_reason}")
-            # 管理员始终可见解析，学生按规则
-            if q.get("explanation") and (is_admin or r["is_correct"]):
-                st.markdown(f"💡 解析： {clean_text(q['explanation'])}")
-            elif q.get("explanation") and not r["is_correct"] and not is_admin:
-                st.caption("🔒 正确答案和解析需完成错题订正后解锁")
+                st.markdown(f"错误原因：{error_reason}")
+
+            # 管理员始终可见解析
+            if is_admin and q.get("explanation"):
+                st.markdown(f"💡 解析：{clean_text(q['explanation'])}")
+            # 学生：答对显示解析，答错引导订正
+            elif not is_admin:
+                if r["is_correct"] and q.get("explanation"):
+                    st.markdown(f"💡 解析：{clean_text(q['explanation'])}")
+                elif not r["is_correct"]:
+                    st.warning("📝 请先完成错题订正，订正后即可查看正确答案和解析")
 
 
 # ==================== 学生：历史记录 ====================
