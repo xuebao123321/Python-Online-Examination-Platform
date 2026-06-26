@@ -951,9 +951,9 @@ def page_admin_dashboard():
     with mc2:
         st.metric("📝 考试总次数", stats['total_exams'])
     with mc3:
-        st.metric("📊 平均正确率", f"{stats['avg_score']}%" if stats['avg_score'] else "N/A")
+        st.metric("📊 平均正确率", f"{stats['avg_score']}%" if stats.get('avg_score') else "N/A")
     with mc4:
-        active_students = len([s for s in stats['student_stats'] if s['exam_count'] > 0])
+        active_students = len([s for s in stats['student_stats'] if (s.get('exam_count') or 0) > 0])
         st.metric("✅ 活跃学生", active_students)
 
     st.divider()
@@ -963,7 +963,7 @@ def page_admin_dashboard():
     if stats['student_stats']:
         student_data = []
         for s in stats['student_stats']:
-            avg = round(s['avg_score'], 1) if s['avg_score'] else 0
+            avg = round(s.get('avg_score') or 0, 1)
             student_data.append({
                 "学生": s['display_name'],
                 "用户名": s['username'],
