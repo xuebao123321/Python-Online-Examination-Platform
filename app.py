@@ -105,6 +105,7 @@ def logout():
     """退出登录"""
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    st.query_params.clear()  # 清除免登录
     init_session()
     st.rerun()
 
@@ -133,6 +134,7 @@ def page_login():
                         st.session_state.logged_in = True
                         st.session_state.user = user
                         st.session_state.page = "📝 参加考试" if user['role'] == 'student' else "📊 仪表盘"
+                        st.query_params["user"] = username  # 刷新免登录
                         st.success(msg)
                         time.sleep(0.5)
                         st.rerun()
@@ -1400,6 +1402,14 @@ def main():
     default_user = st.secrets.get("default_admin_user", "admin")
     default_pass = st.secrets.get("default_admin_pass", "xuxuchang123")
     auth.ensure_default_admin(default_user, default_pass)
+
+    # ---- 刷新免登录：URL中有用户参数则自动恢复 ----
+    if not st.session_state.logged_in and st.query_params.get("user"):
+        saved_user = db.get_user_by_username(st.query_params["user"])
+        if saved_user:
+            st.session_state.logged_in = True
+            st.session_state.user = saved_user
+            st.session_state.page = "📝 参加考试" if saved_user['role'] == 'student' else "📊 仪表盘"
 
     # ---- 未登录 → 显示登录页 ----
     if not st.session_state.logged_in:
