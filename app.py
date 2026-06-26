@@ -578,6 +578,8 @@ def page_student_results():
                 st.markdown(f"你的答案：{r['given_answer'] or '未作答'}")
                 if r["is_correct"]:
                     st.success("✅ 回答正确")
+                    if q.get("explanation"):
+                        st.markdown(f"💡 解析：{clean_text(q['explanation'])}")
                 else:
                     st.error("❌ 回答错误")
 
