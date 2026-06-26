@@ -103,9 +103,10 @@ class TursoConnection:
         """批量执行"""
         requests = []
         for params in params_list:
+            args = [self._to_turso_arg(p) for p in params] if params else []
             requests.append({
                 "type": "execute",
-                "stmt": {"sql": sql, "args": list(params) if params else []}
+                "stmt": {"sql": sql, "args": args}
             })
         body = json.dumps({"requests": requests}).encode("utf-8")
         req = urllib.request.Request(
