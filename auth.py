@@ -30,11 +30,11 @@ def hash_password(password, salt=None):
     return key.hex(), salt.hex()
 
 
-def register_user(username, password, role='student', display_name='', campus_id=None):
-    """
-    注册新用户。
-    campus_id=None 表示超级管理员（仅当 role='admin' 时有效）
-    """
+def register_user(username, password, role='student', display_name='', campus_id=None, agreed_terms=False):
+    """注册新用户。agreed_terms 必须为 True 才允许注册。"""
+    if not agreed_terms:
+        return False, "请先阅读并同意用户协议", None
+
     username = username.strip()
     if not username or len(username) < 2:
         return False, "用户名至少需要2个字符", None
@@ -51,16 +51,16 @@ def register_user(username, password, role='student', display_name='', campus_id
     if role not in ('student', 'admin'):
         return False, "无效的用户角色", None
 
-    # 非超级管理员必须选择校区
     if role != 'admin' or campus_id is not None:
         if campus_id is None:
             return False, "请选择校区", None
 
     pwd_hash, salt = hash_password(password)
     display = display_name.strip() if display_name.strip() else username
+    agreed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        user_id = db.create_user(username, pwd_hash, salt, role, display, campus_id)
+        user_id = db.create_user(username, pwd_hash, salt, role, display, campus_id, agreed_at)
         return True, f"注册成功！欢迎，{display}！", user_id
     except Exception as e:
         return False, f"注册失败：{e}", None
@@ -110,4 +110,4 @@ def ensure_default_admin(username, password):
         return  # 已存在，不修改密码
 
     pwd_hash, salt = hash_password(password)
-    db.create_user(username, pwd_hash, salt, 'admin', '系统管理员', None)
+    db.create_user(username, pwd_hash, salt, 'admin', '系统管理员', None, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))

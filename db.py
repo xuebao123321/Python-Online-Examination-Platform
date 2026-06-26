@@ -76,6 +76,7 @@ def init_db():
             role TEXT NOT NULL DEFAULT 'student',
             display_name TEXT NOT NULL,
             campus_id INTEGER,
+            agreed_terms_at TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY (campus_id) REFERENCES campuses(id)
         )
@@ -125,6 +126,8 @@ def init_db():
     cols = [c[1] for c in cursor.execute("PRAGMA table_info(users)").fetchall()]
     if 'campus_id' not in cols:
         cursor.execute("ALTER TABLE users ADD COLUMN campus_id INTEGER REFERENCES campuses(id)")
+    if 'agreed_terms_at' not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN agreed_terms_at TEXT")
     # 检查 exam_attempts 表是否有 user_id 列
     cols2 = [c[1] for c in cursor.execute("PRAGMA table_info(exam_attempts)").fetchall()]
     if 'user_id' not in cols2:
@@ -197,13 +200,13 @@ def get_upload_logs(campus_id=None, limit=200):
 
 # ==================== 用户操作 ====================
 
-def create_user(username, password_hash, salt, role, display_name, campus_id=None):
+def create_user(username, password_hash, salt, role, display_name, campus_id=None, agreed_terms_at=None):
     """创建用户，返回 user_id"""
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO users (username, password_hash, salt, role, display_name, campus_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (username, password_hash, salt, role, display_name, campus_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        "INSERT INTO users (username, password_hash, salt, role, display_name, campus_id, agreed_terms_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (username, password_hash, salt, role, display_name, campus_id, agreed_terms_at, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     )
     conn.commit()
     uid = cursor.lastrowid

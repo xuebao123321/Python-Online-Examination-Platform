@@ -126,6 +126,28 @@ def page_login():
             reg_pwd = st.text_input("密码", type="password", placeholder="至少4个字符", key="reg_pwd")
             reg_pwd2 = st.text_input("确认密码", type="password", placeholder="再次输入密码", key="reg_pwd2")
             reg_display = st.text_input("显示名称", placeholder="你的姓名或昵称", key="reg_display")
+            # 用户协议
+            with st.expander("📜 用户协议（必读）", expanded=False):
+                st.markdown("""
+**Python 在线考试系统用户协议**
+
+1. **版权承诺**：用户承诺上传的试题内容不存在版权侵权，所有因上传内容引发的法律责任由用户独立承担。
+
+2. **平台角色**：平台仅提供考试练习工具和存储服务，不主动审核用户私有题库内容，不享有用户上传题库的任何著作权。
+
+3. **侵权处理**：平台收到版权方有效侵权通知后，有权立即删除对应题库、限制相关账号使用，由此产生的损失由用户自行承担。
+
+4. **赔偿条款**：用户因上传侵权内容给平台造成索赔、罚款、商誉损失的，需全额赔偿平台因此遭受的全部损失。
+
+5. **免责声明**：本系统为学习辅助工具，题库内容均由用户自行上传，平台不对题库内容的准确性、合法性负责。
+                """)
+
+            terms_agreed = st.checkbox(
+                "我已阅读并同意《用户协议》全部条款",
+                value=False,
+                key="reg_terms"
+            )
+
             reg_role = st.selectbox("角色", ["student", "admin", "super_admin"],
                                     format_func=lambda x: "👨‍🎓 学生" if x == "student" else ("👩‍🏫 校区管理员" if x == "admin" else "🔑 超级管理员"),
                                     key="reg_role")
@@ -150,7 +172,7 @@ def page_login():
                         st.error("两次输入的密码不一致")
                     else:
                         role = "admin" if reg_role == "super_admin" else reg_role
-                        success, msg, uid = auth.register_user(reg_user, reg_pwd, role, reg_display, reg_campus_id)
+                        success, msg, uid = auth.register_user(reg_user, reg_pwd, role, reg_display, reg_campus_id, terms_agreed)
                         if success:
                             st.success(msg)
                             st.session_state.show_register = False
