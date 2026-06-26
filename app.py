@@ -114,13 +114,14 @@ def page_login():
                     st.session_state.show_register = True
                     st.rerun()
 
-            # 应急恢复（仅清空数据库）
+            # 应急恢复（仅系统所有者可用，需恢复密钥）
             with st.expander("🔧 忘记密码？", expanded=False):
-                st.warning("⚠️ 此操作将清空所有用户数据，题库不受影响。")
-                st.caption("联系超级管理员重置密码，或在确认无法恢复时使用此功能。")
-                reset_confirm = st.text_input("输入「确认重置」来启用按钮", key="reset_confirm")
-                if reset_confirm == "确认重置":
-                    if st.button("💣 清空所有用户数据", type="secondary", use_container_width=True):
+                st.warning("请联系超级管理员在后台重置密码。如超级管理员也无法登录，需用恢复密钥重置整个数据库。")
+                st.caption("此操作需要恢复密钥，仅系统所有者知晓。")
+                recovery_key = st.secrets.get("recovery_key", "python2026")
+                reset_key = st.text_input("恢复密钥", type="password", key="public_reset_key")
+                if st.button("💣 清空所有用户数据", type="secondary", use_container_width=True):
+                    if reset_key == recovery_key:
                         import sqlite3
                         conn = sqlite3.connect(db.DB_PATH)
                         conn.execute("DELETE FROM answers")
@@ -133,6 +134,8 @@ def page_login():
                         st.success("✅ 用户数据已清空！请重新注册超级管理员。")
                         time.sleep(1.5)
                         st.rerun()
+                    else:
+                        st.error("恢复密钥错误，请联系系统所有者")
         else:
             # ---- 注册 ----
             st.subheader("📝 注册新账号")
