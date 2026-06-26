@@ -698,7 +698,7 @@ def get_attempt_detail(attempt_id):
 
     answers_rows = conn.execute(
         """SELECT a.*, q.seq, q.qtype, q.question, q.option_a, q.option_b,
-                  q.option_c, q.option_d, q.answer as correct_answer, q.explanation
+                  q.option_c, q.option_d, q.answer, q.explanation
            FROM answers a
            JOIN questions q ON a.question_id = q.id
            WHERE a.attempt_id = ?

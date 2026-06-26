@@ -113,29 +113,6 @@ def page_login():
                 if st.button("还没有账号？去注册", use_container_width=True):
                     st.session_state.show_register = True
                     st.rerun()
-
-            # 应急恢复（仅系统所有者可用，需恢复密钥）
-            with st.expander("🔧 忘记密码？", expanded=False):
-                st.warning("请联系超级管理员在后台重置密码。如超级管理员也无法登录，需用恢复密钥重置整个数据库。")
-                st.caption("此操作需要恢复密钥，仅系统所有者知晓。")
-                recovery_key = st.secrets.get("recovery_key", "python2026")
-                reset_key = st.text_input("恢复密钥", type="password", key="public_reset_key")
-                if st.button("💣 清空所有用户数据", type="secondary", use_container_width=True):
-                    if reset_key == recovery_key:
-                        import sqlite3
-                        conn = sqlite3.connect(db.DB_PATH)
-                        conn.execute("DELETE FROM answers")
-                        conn.execute("DELETE FROM exam_attempts")
-                        conn.execute("DELETE FROM users")
-                        conn.execute("DELETE FROM campuses")
-                        conn.commit()
-                        conn.close()
-                        db.init_db()
-                        st.success("✅ 用户数据已清空！请重新注册超级管理员。")
-                        time.sleep(1.5)
-                        st.rerun()
-                    else:
-                        st.error("恢复密钥错误，请联系系统所有者")
         else:
             # ---- 注册 ----
             st.subheader("📝 注册新账号")
@@ -307,7 +284,7 @@ def _show_exam_questions():
     # 题目
     qtype_badge = "🔵 单选题" if current_q["qtype"] == "单选" else "🟢 判断题"
     st.markdown(f"### {qtype_badge} · 第 {idx + 1} 题")
-    st.markdown(f"#### {current_q['question']}")
+    st.markdown(f"**{current_q['question']}**")
 
     qid = current_q["id"]
     current_answer = st.session_state.answers.get(qid, "")
@@ -321,34 +298,55 @@ def _show_exam_questions():
                 choice_map[text] = label
         current_text = next((t for t, l in choice_map.items() if l == current_answer), None)
         idx_default = choice_labels.index(current_text) if current_text in choice_labels else None
-        selected = st.radio("请选择：", choice_labels, index=idx_default, key=f"q_{qid}", label_visibility="collapsed")
+        selected = st.radio("请选择答案：", choice_labels, index=idx_default, key=f"q_{qid}")
         if selected:
             st.session_state.answers[qid] = choice_map[selected]
     else:
         tf_labels = ["对 ✅", "错 ❌"]
         tf_map = {"对 ✅": "对", "错 ❌": "错"}
         current_index = 1 if current_answer == "错" else (0 if current_answer == "对" else None)
-        selected = st.radio("请判断：", tf_labels, index=current_index, key=f"q_{qid}", horizontal=True, label_visibility="collapsed")
+        selected = st.radio("请判断：", tf_labels, index=current_index, key=f"q_{qid}", horizontal=True)
         if selected:
             st.session_state.answers[qid] = tf_map[selected]
+
+    # 当前题作答状态提示
+    if not st.session_state.answers.get(qid):
+        st.caption("⚠️ 请选择一个答案")
 
     st.divider()
 
     # 导航
     nc1, nc2, nc3, nc4 = st.columns([1, 1, 1, 1])
     with nc1:
-        if idx > 0 and st.button("⬅️ 上一题", use_container_width=True):
+        if st.button("⬅️ 上一题", use_container_width=True, disabled=(idx == 0)):
             st.session_state.current_idx -= 1
             st.rerun()
     with nc2:
-        if idx < total - 1 and st.button("下一题 ➡️", use_container_width=True, type="primary"):
+        if st.button("下一题 ➡️", use_container_width=True, type="primary", disabled=(idx == total - 1)):
             st.session_state.current_idx += 1
             st.rerun()
     with nc4:
         unanswered = total - answered_count
         label = "📩 提交试卷" if unanswered == 0 else f"📩 提交（{unanswered}题未答）"
-        if st.button(label, type="primary", use_container_width=True):
-            _submit_exam(questions, elapsed)
+        submit_clicked = st.button(label, type="primary", use_container_width=True)
+
+        # 提交确认：有未答题时弹出确认
+        if submit_clicked:
+            if unanswered > 0 and not st.session_state.get("confirm_submit", False):
+                st.session_state.confirm_submit = True
+                st.warning(f"⚠️ 还有 {unanswered} 道题未作答！未答题目将计 0 分。")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("✅ 确认提交，不再检查", type="primary", use_container_width=True):
+                        st.session_state.confirm_submit = False
+                        _submit_exam(questions, elapsed)
+                with c2:
+                    if st.button("↩️ 继续答题", use_container_width=True):
+                        st.session_state.confirm_submit = False
+                        st.rerun()
+            else:
+                st.session_state.confirm_submit = False
+                _submit_exam(questions, elapsed)
 
 
 def _submit_exam(questions, elapsed):
@@ -396,13 +394,14 @@ def _render_result(result, time_sec, bank_name="", submitted_at=""):
     st.divider()
 
     st.subheader("📋 逐题回顾")
+    st.markdown("*展开每道题查看答案和解析：*")
     for i, r in enumerate(result["results"]):
         q = r["question"]
         icon = "✅" if r["is_correct"] else "❌"
         given = r["given_answer"] or "（未作答）"
-        with st.expander(f"{icon} 第 {i+1} 题 - {q['question'][:50]}{'...' if len(q['question'])>50 else ''}"):
-            st.caption("🔵 单选" if q["qtype"] == "单选" else "🟢 判断")
-            st.markdown(f"**题目：**{q['question']}")
+        with st.expander(f"{icon} 第 {i+1} 题 — {q['question'][:50]}{'...' if len(q['question'])>50 else ''}"):
+            st.markdown(f"**题型：**{'🔵 单选题' if q['qtype'] == '单选' else '🟢 判断题'}")
+            st.markdown(f"**题目：** {q['question']}")
             if q["qtype"] == "单选":
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
                     if q.get(key):
@@ -413,10 +412,10 @@ def _render_result(result, time_sec, bank_name="", submitted_at=""):
                             mark = " ❌（你的答案）"
                         st.markdown(f"　**{label}**) {q[key]}{mark}")
             else:
-                st.markdown(f"　你的答案：**{given}**")
-                st.markdown(f"　正确答案：**{q['answer']}**")
+                st.markdown(f"　**你的答案：** {given}")
+                st.markdown(f"　**正确答案：** {q['answer']}")
             if q.get("explanation"):
-                st.info(f"💡 **解析：**{q['explanation']}")
+                st.markdown(f"💡 **解析：** {q['explanation']}")
 
 
 def page_student_results():
@@ -448,6 +447,8 @@ def page_student_results():
     with c1:
         if st.button("🔄 重新考试", use_container_width=True, type="primary"):
             reset_exam_state()
+            st.session_state.last_result = None
+            st.session_state.page = "📝 参加考试"
             st.rerun()
     with c2:
         if st.button("📜 查看历史", use_container_width=True):
