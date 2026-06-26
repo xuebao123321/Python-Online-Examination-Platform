@@ -38,12 +38,25 @@ class TursoConnection:
         self.row_factory = None
         self.total_changes = 0
 
+    def _to_turso_arg(self, val):
+        """将 Python 值转为 Turso 类型格式"""
+        if val is None:
+            return {"type": "null"}
+        if isinstance(val, bool):
+            return {"type": "integer", "value": "1" if val else "0"}
+        if isinstance(val, int):
+            return {"type": "integer", "value": str(val)}
+        if isinstance(val, float):
+            return {"type": "real", "value": str(val)}
+        return {"type": "text", "value": str(val)}
+
     def _request(self, sql, params=None):
         """发送 HTTP 请求到 Turso"""
+        args = [self._to_turso_arg(p) for p in params] if params else []
         body = {
             "requests": [{
                 "type": "execute",
-                "stmt": {"sql": sql, "args": list(params) if params else []}
+                "stmt": {"sql": sql, "args": args}
             }]
         }
         data = json.dumps(body).encode("utf-8")
@@ -71,9 +84,10 @@ class TursoConnection:
         cursor = TursoCursor(self)
         if "results" in result and result["results"]:
             r = result["results"][0]
-            if r["type"] == "execute" and "response" in r:
+            # 外层 type 是 "ok"，内层 response.type 是 "execute"
+            if "response" in r:
                 resp = r["response"]
-                if resp["type"] == "execute" and "result" in resp:
+                if "result" in resp:
                     res = resp["result"]
                     cursor._columns = [c["name"] for c in res.get("cols", [])]
                     cursor._rows = []
@@ -81,6 +95,7 @@ class TursoConnection:
                         values = [v.get("value", None) for v in row_data]
                         cursor._rows.append((cursor._columns, values))
                     cursor._affected_rows = res.get("affected_row_count", 0)
+                    cursor.lastrowid = res.get("last_insert_rowid")
                     self.total_changes += cursor._affected_rows
         return cursor
 
@@ -106,6 +121,10 @@ class TursoConnection:
             json.loads(resp.read().decode("utf-8"))
         self.total_changes += len(params_list)
 
+    def cursor(self):
+        """返回一个新 cursor"""
+        return TursoCursor(self)
+
     def commit(self):
         pass  # Turso 自动提交
 
@@ -122,6 +141,18 @@ class TursoCursor:
         self._idx = 0
         self._affected_rows = 0
         self.lastrowid = None
+
+    def execute(self, sql, params=None):
+        """执行 SQL（委托给 connection）"""
+        result = self.connection.execute(sql, params)
+        self._columns = result._columns
+        self._rows = result._rows
+        self._affected_rows = result._affected_rows
+        self.lastrowid = result.lastrowid
+        return self
+
+    def executemany(self, sql, params_list):
+        self.connection.executemany(sql, params_list)
 
     def fetchone(self):
         if self._idx >= len(self._rows):
