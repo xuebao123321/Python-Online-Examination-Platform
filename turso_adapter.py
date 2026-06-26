@@ -96,7 +96,15 @@ class TursoConnection:
                     cursor._columns = [c["name"] for c in res.get("cols", [])]
                     cursor._rows = []
                     for row_data in res.get("rows", []):
-                        values = [v.get("value", None) for v in row_data]
+                        values = []
+                        for v in row_data:
+                            t = v.get("type", "text")
+                            val = v.get("value", None)
+                            if t in ("integer", "int"):
+                                val = int(val) if val is not None else None
+                            elif t in ("real", "float"):
+                                val = float(val) if val is not None else None
+                            values.append(val)
                         cursor._rows.append((cursor._columns, values))
                     cursor._affected_rows = res.get("affected_row_count", 0)
                     cursor.lastrowid = res.get("last_insert_rowid")
