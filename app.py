@@ -1,5 +1,5 @@
 """
-Python 在线考试系统 — 多用户版
+在线考试练习系统 — 多用户版
 支持学生和管理员两种角色。
 """
 
@@ -25,8 +25,8 @@ import code_runner
 
 # ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="Python 考试系统",
-    page_icon="🐍",
+    page_title="在线考试练习系统",
+    page_icon="📝",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -114,8 +114,7 @@ def logout():
 
 def page_login():
     """登录和注册页面"""
-    st.markdown("<h1 style='text-align:center'>🐍 Python 在线考试系统</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center;color:gray'>中国电子学会 Python 等级考试练习平台</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center'>📝 在线考试练习系统</h1>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
     col_center = st.columns([1, 2, 1])
@@ -155,7 +154,7 @@ def page_login():
             # 用户协议
             with st.expander("📜 用户协议（必读）", expanded=False):
                 st.markdown("""
-Python 在线考试系统用户协议
+在线考试练习系统用户协议
 
 1. 版权承诺：用户承诺上传的试题内容不存在版权侵权，所有因上传内容引发的法律责任由用户独立承担。
 
@@ -1435,7 +1434,7 @@ def main():
 
     # ---- 侧边栏 ----
     with st.sidebar:
-        st.markdown(f"# 🐍 考试系统")
+        st.markdown(f"# 📝 在线考试")
 
         # 显示身份
         if is_super_admin:
