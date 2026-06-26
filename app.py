@@ -5,6 +5,7 @@ Python 在线考试系统 — 多用户版
 
 import streamlit as st
 import time
+import os
 import db
 import csv_import
 import grader
@@ -34,8 +35,13 @@ def init_session():
         "last_result": None,
         "last_time_sec": 0,
         "review_attempt_id": None,
-        "show_register": False, # 登录/注册切换
-        "admin_view_student": None,  # 管理员查看的学生 ID
+        "show_register": False,
+        "admin_view_student": None,
+        "confirm_submit": False,
+        "review_idx": 0,
+        "review_answers": {},
+        "review_reasons": {},
+        "wrong_qids": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -252,6 +258,11 @@ def _resume_exam(attempt):
         st.rerun()
         return
     questions = db.get_questions(bank["id"])
+    if not questions:
+        st.error("题库题目已被删除，无法恢复考试。")
+        db.abandon_attempt(attempt["id"])
+        st.rerun()
+        return
     st.session_state.exam_state = "in_progress"
     st.session_state.questions = questions
     st.session_state.current_idx = 0
@@ -377,7 +388,7 @@ def page_student_results():
     time_sec = st.session_state.last_time_sec
     exam_state = st.session_state.exam_state
 
-    # 从历史回顾进入（管理员或学生查看历史）
+    # 从数据库重新加载结果（历史回顾 / 订正完成后）
     if result is None and st.session_state.review_attempt_id:
         detail = db.get_attempt_detail(st.session_state.review_attempt_id)
         if detail:
@@ -387,9 +398,19 @@ def page_student_results():
             ]}
             time_sec = detail.get("time_sec", 0)
             _render_result_full(result, time_sec, detail.get("bank_name", ""), detail.get("submitted_at", ""))
-            if st.button("↩️ 返回", use_container_width=True):
-                st.session_state.review_attempt_id = None
-                st.rerun()
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🔄 重新考试", use_container_width=True, type="primary"):
+                    reset_exam_state()
+                    st.session_state.last_result = None
+                    st.session_state.review_attempt_id = None
+                    st.session_state.page = "📝 参加考试"
+                    st.rerun()
+            with c2:
+                if st.button("↩️ 返回", use_container_width=True):
+                    st.session_state.review_attempt_id = None
+                    st.session_state.exam_state = "idle"
+                    st.rerun()
             return
 
     if result is None:
@@ -571,12 +592,16 @@ def _submit_review():
         db.submit_attempt(attempt_id, new_score, st.session_state.last_time_sec)
 
     st.session_state.exam_state = "reviewed"
-    st.session_state.last_result = None  # 清除缓存，重新加载
+    st.session_state.review_attempt_id = attempt_id  # 标记从数据库重新加载
+    st.session_state.last_result = None
     st.rerun()
 
 
 def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
     """渲染完整结果（含答案和解析），管理员和学生订正后可见"""
+    if not result:
+        st.info("暂无考试结果数据")
+        return
     score, total = result["score"], result["total"]
     percentage = round(score / total * 100, 1) if total > 0 else 0
 
@@ -601,7 +626,9 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
     for i, r in enumerate(result["results"]):
         q = r["question"]
         icon = "✅" if r["is_correct"] else "❌"
-        given = r["given_answer"] or "（未作答）"
+        # 如果有订正答案则显示订正后的，否则显示首次答案
+        review_ans = q.get("review_answer", "")
+        given = review_ans if review_ans else (r["given_answer"] or "（未作答）")
         error_reason = q.get("error_reason", "")
 
         title = f"{icon} 第 {i+1} 题 — {q['question'][:50]}{'...' if len(q['question'])>50 else ''}"
@@ -641,8 +668,8 @@ def page_student_history():
         return
 
     total_exams = len(attempts)
-    avg_pct = round(sum(a["score"] / a["total"] * 100 for a in attempts) / total_exams, 1) if total_exams > 0 else 0
-    best_pct = round(max(a["score"] / a["total"] * 100 for a in attempts), 1) if total_exams > 0 else 0
+    avg_pct = round(sum(a["score"] / max(a["total"], 1) * 100 for a in attempts) / total_exams, 1) if total_exams > 0 else 0
+    best_pct = round(max(a["score"] / max(a["total"], 1) * 100 for a in attempts), 1) if total_exams > 0 else 0
 
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
@@ -724,7 +751,8 @@ def page_admin_upload():
         # 模板下载
         sm1, sm2 = st.columns([1, 2])
         with sm1:
-            with open("sample_questions/考试题库模板.csv", "rb") as f:
+            template_path = os.path.join(os.path.dirname(__file__), "sample_questions", "考试题库模板.csv")
+            with open(template_path, "rb") as f:
                 st.download_button("📄 下载 CSV 模板", f, "考试题库模板.csv", "text/csv")
         with sm2:
             st.caption("用 Excel 编辑后另存为 CSV")
@@ -945,7 +973,7 @@ def page_admin_students():
         detail = db.get_student_detail(s['id'])
         attempts = detail['attempts']
         exam_count = len(attempts)
-        avg_pct = round(sum(a['score'] / a['total'] * 100 for a in attempts) / exam_count, 1) if exam_count > 0 else 0
+        avg_pct = round(sum(a['score'] / max(a['total'], 1) * 100 for a in attempts) / exam_count, 1) if exam_count > 0 else 0
 
         with st.container():
             c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
@@ -987,7 +1015,7 @@ def page_admin_student_detail():
 
     exam_count = len(attempts)
     avg_pct = round(sum(a['score'] / a['total'] * 100 for a in attempts) / exam_count, 1) if exam_count > 0 else 0
-    best_pct = round(max(a['score'] / a['total'] * 100 for a in attempts), 1) if exam_count > 0 else 0
+    best_pct = round(max(a['score'] / max(a['total'], 1) * 100 for a in attempts), 1) if exam_count > 0 else 0
 
     mc1, mc2, mc3 = st.columns(3)
     with mc1:
@@ -1038,7 +1066,7 @@ def page_admin_records():
         return
 
     total = len(attempts)
-    avg_pct = round(sum(a["score"] / a["total"] * 100 for a in attempts) / total, 1) if total > 0 else 0
+    avg_pct = round(sum(a["score"] / max(a["total"], 1) * 100 for a in attempts) / total, 1) if total > 0 else 0
     mc1, mc2 = st.columns(2)
     with mc1:
         st.metric("总考试次数", total)
@@ -1075,7 +1103,7 @@ def page_admin_users():
     st.title("🔧 用户管理")
     st.caption("查看所有用户、重置密码")
 
-    recovery_key = st.secrets.get("recovery_key", "python2026")
+    recovery_key = st.secrets["recovery_key"]  # 必须在 secrets 中配置
 
     # 用户列表
     st.subheader("👁️ 所有用户")
@@ -1211,7 +1239,7 @@ def main():
 
         # 导航菜单按角色
         if is_super_admin:
-            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "🔧 用户管理", "📤 上传题库", "📜 全部记录"]
+            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "🔧 用户管理", "📊 考试结果", "📤 上传题库", "📜 全部记录"]
         elif is_admin:
             pages = ["📊 仪表盘", "👥 学生管理", "📤 上传题库", "📜 全部记录"]
         else:

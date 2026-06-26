@@ -87,17 +87,13 @@ def login_user(username, password):
     return True, f"登录成功！欢迎回来，{user['display_name']}！", user
 
 
-def reset_password(username, new_password, recovery_key, valid_key):
-    """
-    应急密码重置。valid_key 从外部传入（st.secrets）。
-    """
-    if recovery_key != valid_key:
+def reset_password(username, new_password, recovery_key, expected_key):
+    """应急密码重置。expected_key 从 st.secrets 传入。"""
+    if recovery_key != expected_key:
         return False, "恢复密钥错误"
-
     user = db.get_user_by_username(username)
     if not user:
         return False, "用户名不存在"
-
     pwd_hash, salt = hash_password(new_password)
     ok = db.reset_user_password(username, pwd_hash, salt)
     if ok:
@@ -107,15 +103,11 @@ def reset_password(username, new_password, recovery_key, valid_key):
 
 def ensure_default_admin(username, password):
     """
-    确保默认超级管理员存在。如果用户表为空或该用户不存在，则自动创建。
+    确保默认超级管理员存在。仅首次创建，不覆盖已有密码。
     """
     existing = db.get_user_by_username(username)
     if existing:
-        # 更新密码为最新设定（防止密码被改后无法恢复）
-        pwd_hash, salt = hash_password(password)
-        db.reset_user_password(username, pwd_hash, salt)
-        return
+        return  # 已存在，不修改密码
 
-    # 创建超级管理员 (campus_id=None)
     pwd_hash, salt = hash_password(password)
     db.create_user(username, pwd_hash, salt, 'admin', '系统管理员', None)

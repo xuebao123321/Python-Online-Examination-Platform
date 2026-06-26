@@ -225,9 +225,18 @@ def get_campus_by_id(campus_id):
 
 
 def delete_campus(campus_id):
-    """删除校区（需要先处理关联用户）"""
+    """删除校区及其下的所有用户（管理员和学生）"""
     conn = get_conn()
-    conn.execute("UPDATE users SET campus_id = NULL WHERE campus_id = ?", (campus_id,))
+    # 删除该校区用户的考试记录和答案
+    conn.execute("""
+        DELETE FROM answers WHERE attempt_id IN (
+            SELECT id FROM exam_attempts WHERE user_id IN (
+                SELECT id FROM users WHERE campus_id = ?
+            )
+        )
+    """, (campus_id,))
+    conn.execute("DELETE FROM exam_attempts WHERE user_id IN (SELECT id FROM users WHERE campus_id = ?)", (campus_id,))
+    conn.execute("DELETE FROM users WHERE campus_id = ?", (campus_id,))
     conn.execute("DELETE FROM campuses WHERE id = ?", (campus_id,))
     conn.commit()
     conn.close()
@@ -334,16 +343,6 @@ def get_all_years():
     ).fetchall()
     conn.close()
     return [r["year"] for r in rows]
-
-
-def get_all_banks():
-    """获取所有题库列表"""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM question_banks ORDER BY level, year DESC"
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
 
 
 def delete_bank(bank_id):
