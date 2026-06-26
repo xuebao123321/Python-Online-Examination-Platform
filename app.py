@@ -28,8 +28,80 @@ st.set_page_config(
     page_title="在线考试练习系统",
     page_icon="📝",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
+
+# ==================== 响应式 CSS ====================
+st.markdown("""
+<style>
+    /* 全局响应式 */
+    @media (max-width: 768px) {
+        .stButton button {
+            padding: 12px 8px !important;
+            font-size: 14px !important;
+            min-height: 44px !important;
+        }
+        .stRadio label {
+            font-size: 15px !important;
+            padding: 8px 0 !important;
+        }
+        .stTextInput input, .stTextArea textarea, .stSelectbox > div {
+            font-size: 16px !important;  /* 防止iOS缩放 */
+        }
+        h2 { font-size: 20px !important; }
+        h3 { font-size: 17px !important; }
+        h4 { font-size: 15px !important; }
+        .st-emotion-cache-1kyxreq {
+            /* 移动端侧边栏更宽 */
+            min-width: 200px !important;
+        }
+    }
+
+    /* 平板适配 */
+    @media (min-width: 769px) and (max-width: 1024px) {
+        .stButton button {
+            min-height: 40px !important;
+        }
+    }
+
+    /* 所有端：表格横向滚动 */
+    .stDataFrame {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* 按钮最小触控面积 */
+    button {
+        min-height: 44px !important;
+        touch-action: manipulation;
+    }
+
+    /* 禁止iOS输入框自动缩放 */
+    input, textarea, select {
+        font-size: 16px !important;
+    }
+
+    /* 考试导航按钮等宽 */
+    .stButton button {
+        white-space: nowrap;
+    }
+
+    /* 侧边栏响应式 */
+    [data-testid="stSidebar"] {
+        min-width: 220px !important;
+        max-width: 300px !important;
+    }
+    @media (max-width: 576px) {
+        [data-testid="stSidebar"] {
+            min-width: 180px !important;
+            max-width: 250px !important;
+        }
+    }
+
+    /* 倒计时醒目 */
+    .timer-warning { color: #ff4b4b !important; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
 
 
 # ==================== Session State 初始化 ====================
