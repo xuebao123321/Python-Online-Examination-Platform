@@ -26,8 +26,12 @@ class TursoRow:
     def __iter__(self):
         return iter(self._values)
 
+    def to_dict(self):
+        """安全转为 Python dict"""
+        return dict(zip(self._columns, self._values))
+
     def __repr__(self):
-        return dict(zip(self._columns, self._values)).__repr__()
+        return self.to_dict().__repr__()
 
 
 class TursoConnection:

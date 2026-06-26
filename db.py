@@ -711,23 +711,16 @@ def get_admin_stats(campus_id=None):
     conn = get_conn()
 
     if campus_id:
-        total_students = conn.execute(
-            "SELECT COUNT(*) as cnt FROM users WHERE role = 'student' AND campus_id = ?",
-            (campus_id,)
-        ).fetchone()['cnt']
-        total_exams = conn.execute(
-            """SELECT COUNT(*) as cnt FROM exam_attempts ea
+        r = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE role = 'student' AND campus_id = ?", (campus_id,)).fetchone()
+        total_students = int(r['cnt'] or 0) if r else 0
+        r = conn.execute("""SELECT COUNT(*) as cnt FROM exam_attempts ea
                JOIN users u ON ea.user_id = u.id
-               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?""",
-            (campus_id,)
-        ).fetchone()['cnt']
-        avg_score = conn.execute(
-            """SELECT AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_pct
-               FROM exam_attempts ea
-               JOIN users u ON ea.user_id = u.id
-               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?""",
-            (campus_id,)
-        ).fetchone()['avg_pct']
+               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?""", (campus_id,)).fetchone()
+        total_exams = int(r['cnt'] or 0) if r else 0
+        r = conn.execute("""SELECT AVG(CAST(ea.score AS FLOAT)/ea.total*100) as avg_pct
+               FROM exam_attempts ea JOIN users u ON ea.user_id = u.id
+               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?""", (campus_id,)).fetchone()
+        avg_score = round(float(r['avg_pct']), 1) if r and r['avg_pct'] else 0
         student_stats = conn.execute(
             """SELECT u.id, u.display_name, u.username,
                       COUNT(ea.id) as exam_count,
@@ -755,15 +748,12 @@ def get_admin_stats(campus_id=None):
             (campus_id,)
         ).fetchall()
     else:
-        total_students = conn.execute(
-            "SELECT COUNT(*) as cnt FROM users WHERE role = 'student'"
-        ).fetchone()['cnt']
-        total_exams = conn.execute(
-            "SELECT COUNT(*) as cnt FROM exam_attempts WHERE submitted_at IS NOT NULL"
-        ).fetchone()['cnt']
-        avg_score = conn.execute(
-            "SELECT AVG(CAST(score AS FLOAT)/total*100) as avg_pct FROM exam_attempts WHERE submitted_at IS NOT NULL"
-        ).fetchone()['avg_pct']
+        r = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE role = 'student'").fetchone()
+        total_students = int(r['cnt'] or 0) if r else 0
+        r = conn.execute("SELECT COUNT(*) as cnt FROM exam_attempts WHERE submitted_at IS NOT NULL").fetchone()
+        total_exams = int(r['cnt'] or 0) if r else 0
+        r = conn.execute("SELECT AVG(CAST(score AS FLOAT)/total*100) as avg_pct FROM exam_attempts WHERE submitted_at IS NOT NULL").fetchone()
+        avg_score = round(float(r['avg_pct']), 1) if r and r['avg_pct'] else 0
         student_stats = conn.execute(
             """SELECT u.id, u.display_name, u.username,
                       COUNT(ea.id) as exam_count,
@@ -792,7 +782,7 @@ def get_admin_stats(campus_id=None):
     return {
         'total_students': total_students,
         'total_exams': total_exams,
-        'avg_score': round(avg_score, 1) if avg_score else 0,
+        'avg_score': avg_score,
         'student_stats': [dict(r) for r in student_stats],
         'exam_stats': [dict(r) for r in exam_stats],
     }
