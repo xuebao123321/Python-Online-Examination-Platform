@@ -393,7 +393,7 @@ def _show_exam_questions():
                 choice_map[text] = label
         current_text = next((t for t, l in choice_map.items() if l == current_answer), None)
         idx_default = choice_labels.index(current_text) if current_text in choice_labels else None
-        selected = st.radio("请选择答案：", choice_labels, index=idx_default, key=f"q_{qid}")
+        selected = st.radio("请选择作答：", choice_labels, index=idx_default, key=f"q_{qid}")
         if selected:
             st.session_state.answers[qid] = choice_map[selected]
     elif qtype == "判断":
@@ -575,13 +575,13 @@ def page_student_results():
                 st.code(code, language="python")
                 st.info("📝 编程题需人工批改，提交后管理员会查看代码")
             else:
-                st.markdown(f"你的答案：{r['given_answer'] or '未作答'}")
+                st.markdown(f"学生作答：{r['given_answer'] or '未作答'}")
                 if r["is_correct"]:
-                    st.success("✅ 回答正确")
+                    st.success("✅ 作答正确")
                     if q.get("explanation"):
                         st.markdown(f"💡 解析：{clean_text(q['explanation'])}")
                 else:
-                    st.error("❌ 回答错误")
+                    st.error("❌ 作答错误（正确答案和正确答案和解析需完成错题订正后解锁）")
 
     st.divider()
 
@@ -637,7 +637,7 @@ def _show_review_mode():
         prev = st.session_state.review_answers.get(qid, "")
         prev_text = next((t for t, l in choice_map.items() if l == prev), None)
         idx_default = choice_labels.index(prev_text) if prev_text in choice_labels else None
-        selected = st.radio("你的新答案：", choice_labels, index=idx_default, key=f"review_q_{qid}")
+        selected = st.radio("你的新作答：", choice_labels, index=idx_default, key=f"review_q_{qid}")
         if selected:
             st.session_state.review_answers[qid] = choice_map[selected]
     else:
@@ -645,7 +645,7 @@ def _show_review_mode():
         tf_map = {"对 ✅": "对", "错 ❌": "错"}
         prev = st.session_state.review_answers.get(qid, "")
         cur_idx = 1 if prev == "错" else (0 if prev == "对" else None)
-        selected = st.radio("你的新答案：", tf_labels, index=cur_idx, key=f"review_q_{qid}", horizontal=True)
+        selected = st.radio("你的新作答：", tf_labels, index=cur_idx, key=f"review_q_{qid}", horizontal=True)
         if selected:
             st.session_state.review_answers[qid] = tf_map[selected]
 
@@ -763,10 +763,10 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
 
             if phase == "review" and review_ans:
                 # 有订正记录：显示首次和订正
-                st.markdown(f"首次答案：{first_ans or '未作答'} {'✅' if False else '❌'}")
-                st.markdown(f"订正答案：{review_ans} {'✅' if first_correct else '❌'}")
+                st.markdown(f"首次作答：{first_ans or '未作答'} {'✅' if False else '❌'}")
+                st.markdown(f"订正作答：{review_ans} {'✅' if first_correct else '❌'}")
             elif q["qtype"] != "编程":
-                st.markdown(f"答案：{first_ans or given or '未作答'} {'✅' if first_correct else '❌'}")
+                st.markdown(f"作答：{first_ans or given or '未作答'} {'✅' if first_correct else '❌'}")
 
             if q["qtype"] == "编程":
                 if given:
@@ -781,17 +781,17 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
                         if label == q["answer"]:
                             mark = " ✅（正确答案）"
                         elif label == given:
-                            mark = " ❌（你的答案）"
+                            mark = " ❌（学生作答）"
                         st.markdown(f"{label}) {q[key]}{mark}")
             else:
-                st.markdown(f"正确答案： {q['answer']}")
+                st.markdown(f"正确作答： {q['answer']}")
             if error_reason:
                 st.markdown(f"错误原因： {error_reason}")
             # 管理员始终可见解析，学生按规则
             if q.get("explanation") and (is_admin or r["is_correct"]):
                 st.markdown(f"💡 解析： {clean_text(q['explanation'])}")
             elif q.get("explanation") and not r["is_correct"] and not is_admin:
-                st.caption("🔒 解析需完成错题订正后解锁")
+                st.caption("🔒 正确答案和解析需完成错题订正后解锁")
 
 
 # ==================== 学生：历史记录 ====================
@@ -862,11 +862,11 @@ def page_student_wrong():
             if q["qtype"] == "单选":
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
                     if q.get(key):
-                        mark = " ✅" if label == q["answer"] else (" ❌ 你的答案" if label == q.get("given_answer") else "")
+                        mark = " ✅" if label == q["answer"] else (" ❌ 学生作答" if label == q.get("given_answer") else "")
                         st.markdown(f"　{label}) {q[key]}{mark}")
             else:
-                st.markdown(f"　你的答案：{q.get('given_answer', '未作答')}")
-                st.markdown(f"　正确答案：{q['answer']}")
+                st.markdown(f"　学生作答：{q.get('given_answer', '未作答')}")
+                st.markdown(f"　正确作答：{q['answer']}")
             if q.get("explanation"):
                 st.info(f"💡 解析：{q['explanation']}")
 
@@ -880,7 +880,7 @@ def page_admin_upload():
         st.markdown("""
         必需列名： `序号,题型,题目,选项A,选项B,选项C,选项D,正确答案,解析`
         - 题型：`单选` / `判断` / `编程`
-        - 正确答案：单选填 A/B/C/D，判断填 对/错，编程题留空或填参考代码
+        - 正确作答：单选填 A/B/C/D，判断填 对/错，编程题留空或填参考代码
         - 解析：编程题可填解题思路或参考代码
         - 文件编码：UTF-8
         """)
