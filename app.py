@@ -359,25 +359,229 @@ def _submit_exam(questions, elapsed):
     db.save_answers_batch(answers_batch)
     st.session_state.last_result = result
     st.session_state.last_time_sec = elapsed
-    st.session_state.exam_state = "submitted"
+    st.session_state.exam_state = "submitted"  # 首次提交，不展示解析
+    st.session_state.wrong_qids = [r["question"]["id"] for r in result["results"] if not r["is_correct"]]
+    st.session_state.review_answers = {}
+    st.session_state.review_reasons = {}
     st.rerun()
 
 
 # ==================== 考试结果（学生+共用） ====================
 
-def _render_result(result, time_sec, bank_name="", submitted_at=""):
-    """渲染考试结果，被学生结果页和管理员查看页共用"""
+def page_student_results():
+    st.title("📊 考试结果")
+    user = st.session_state.user
+    is_admin_view = user['role'] == 'admin'
+
+    result = st.session_state.last_result
+    time_sec = st.session_state.last_time_sec
+    exam_state = st.session_state.exam_state
+
+    # 从历史回顾进入（管理员或学生查看历史）
+    if result is None and st.session_state.review_attempt_id:
+        detail = db.get_attempt_detail(st.session_state.review_attempt_id)
+        if detail:
+            result = {"score": detail["score"], "total": detail["total"], "results": [
+                {"question": a, "given_answer": a["given_answer"], "is_correct": bool(a["is_correct"])}
+                for a in detail["answers"]
+            ]}
+            time_sec = detail.get("time_sec", 0)
+            _render_result_full(result, time_sec, detail.get("bank_name", ""), detail.get("submitted_at", ""))
+            if st.button("↩️ 返回", use_container_width=True):
+                st.session_state.review_attempt_id = None
+                st.rerun()
+            return
+
+    if result is None:
+        st.info("还没有考试结果，去「参加考试」完成一次考试吧！")
+        return
+
+    # ---- 订正模式 ----
+    if exam_state == "reviewing":
+        _show_review_mode()
+        return
+
+    # ---- 已订正完成 / 管理员查看 ----
+    if exam_state == "reviewed" or is_admin_view:
+        _render_result_full(result, time_sec)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔄 重新考试", use_container_width=True, type="primary"):
+                reset_exam_state()
+                st.session_state.last_result = None
+                st.session_state.page = "📝 参加考试"
+                st.rerun()
+        return
+
+    # ---- 首次提交：只显示得分和 ✅❌，不给答案 ----
+    score, total = result["score"], result["total"]
+    percentage = round(score / total * 100, 1) if total > 0 else 0
+    emoji = "🏆" if percentage >= 90 else ("👍" if percentage >= 75 else ("💪" if percentage >= 60 else "📚"))
+
+    st.markdown(f"## {emoji} 得分：{score} / {total}（{percentage}%）")
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1:
+        st.metric("得分", f"{score} / {total}")
+    with mc2:
+        st.metric("正确率", f"{percentage}%")
+    with mc3:
+        st.metric("用时", format_time(time_sec))
+    st.progress(score / total if total > 0 else 0)
+
+    st.divider()
+    st.subheader("📋 答题情况")
+    st.info("💡 提交后暂不显示答案和解析。请先完成错题订正，订正后将解锁全部解析。")
+
+    wrong_count = 0
+    for i, r in enumerate(result["results"]):
+        icon = "✅" if r["is_correct"] else "❌"
+        q = r["question"]
+        if not r["is_correct"]:
+            wrong_count += 1
+        with st.expander(f"{icon} 第 {i+1} 题 — {q['question'][:60]}{'...' if len(q['question'])>60 else ''}"):
+            st.markdown(f"**题型：**{'🔵 单选题' if q['qtype']=='单选' else '🟢 判断题'}")
+            st.markdown(f"**题目：**{q['question']}")
+            st.markdown(f"**你的答案：**{r['given_answer'] or '未作答'}")
+            if r["is_correct"]:
+                st.success("✅ 回答正确")
+            else:
+                st.error("❌ 回答错误")
+
+    st.divider()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if wrong_count > 0:
+            if st.button(f"📝 错题订正（{wrong_count}题）", type="primary", use_container_width=True):
+                st.session_state.exam_state = "reviewing"
+                st.session_state.review_idx = 0
+                st.rerun()
+        else:
+            if st.button("🎉 查看全部解析", type="primary", use_container_width=True):
+                st.session_state.exam_state = "reviewed"
+                st.rerun()
+    with c2:
+        if st.button("🔄 重新考试", use_container_width=True):
+            reset_exam_state()
+            st.session_state.last_result = None
+            st.session_state.page = "📝 参加考试"
+            st.rerun()
+
+
+def _show_review_mode():
+    """错题订正模式"""
+    st.subheader("📝 错题订正")
+    st.caption("请重新作答错题，并选择错误原因。完成后将解锁全部解析。")
+
+    result = st.session_state.last_result
+    wrong_results = [r for r in result["results"] if not r["is_correct"]]
+    total_wrong = len(wrong_results)
+    idx = st.session_state.get("review_idx", 0)
+
+    if idx >= total_wrong:
+        # 订正完成，提交
+        _submit_review()
+        return
+
+    r = wrong_results[idx]
+    q = r["question"]
+    qid = q["id"]
+
+    st.progress((idx + 1) / total_wrong, f"错题 {idx + 1} / {total_wrong}")
+    st.markdown(f"### 第 {idx+1} 题")
+    st.markdown(f"**{q['question']}**")
+
+    if q["qtype"] == "单选":
+        choice_labels, choice_map = [], {}
+        for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
+            if q.get(key):
+                text = f"{label}. {q[key]}"
+                choice_labels.append(text)
+                choice_map[text] = label
+        prev = st.session_state.review_answers.get(qid, "")
+        prev_text = next((t for t, l in choice_map.items() if l == prev), None)
+        idx_default = choice_labels.index(prev_text) if prev_text in choice_labels else None
+        selected = st.radio("你的新答案：", choice_labels, index=idx_default, key=f"review_q_{qid}")
+        if selected:
+            st.session_state.review_answers[qid] = choice_map[selected]
+    else:
+        tf_labels = ["对 ✅", "错 ❌"]
+        tf_map = {"对 ✅": "对", "错 ❌": "错"}
+        prev = st.session_state.review_answers.get(qid, "")
+        cur_idx = 1 if prev == "错" else (0 if prev == "对" else None)
+        selected = st.radio("你的新答案：", tf_labels, index=cur_idx, key=f"review_q_{qid}", horizontal=True)
+        if selected:
+            st.session_state.review_answers[qid] = tf_map[selected]
+
+    st.markdown("**错误原因：**（必选）")
+    reasons = ["粗心马虎", "知识点未掌握", "没有思路", "审题不清", "其他"]
+    reason = st.selectbox("选择错误原因", [""] + reasons, key=f"reason_{qid}")
+    if reason:
+        st.session_state.review_reasons[qid] = reason
+
+    st.divider()
+    nc1, nc2, nc3 = st.columns([1, 1, 2])
+    with nc1:
+        if idx > 0 and st.button("⬅️ 上一题", use_container_width=True):
+            st.session_state.review_idx -= 1
+            st.rerun()
+    with nc2:
+        can_next = qid in st.session_state.review_answers and qid in st.session_state.review_reasons
+        if st.button("下一题 ➡️", use_container_width=True, type="primary", disabled=not can_next):
+            if not can_next:
+                st.warning("请选择答案和错误原因")
+            else:
+                st.session_state.review_idx += 1
+                st.rerun()
+    with nc3:
+        if idx == total_wrong - 1:
+            all_done = all(
+                qid in st.session_state.review_answers and qid in st.session_state.review_reasons
+                for qid in [wr["question"]["id"] for wr in wrong_results]
+            )
+            if st.button("📩 提交订正", type="primary", use_container_width=True, disabled=not all_done):
+                _submit_review()
+
+
+def _submit_review():
+    """提交订正"""
+    result = st.session_state.last_result
+    wrong_qids = st.session_state.wrong_qids
+    review_answers = st.session_state.review_answers
+    review_reasons = st.session_state.review_reasons
+    attempt_id = st.session_state.attempt_id
+
+    # 构建订正数据
+    review_list = []
+    for qid in wrong_qids:
+        ra = review_answers.get(qid, "")
+        rr = review_reasons.get(qid, "")
+        # 判断订正是否正确
+        correct_q = next((r["question"] for r in result["results"] if r["question"]["id"] == qid), None)
+        is_correct = grader.grade_single(correct_q, ra) if correct_q else False
+        review_list.append((attempt_id, qid, ra, 1 if is_correct else 0, rr))
+
+    db.save_review_answers(review_list)
+
+    # 更新考试分数（订正后重新计算）
+    # 获取所有答案（首次 + 订正）
+    detail = db.get_attempt_detail(attempt_id)
+    if detail:
+        new_score = sum(1 for a in detail["answers"] if a["is_correct"])
+        db.submit_attempt(attempt_id, new_score, st.session_state.last_time_sec)
+
+    st.session_state.exam_state = "reviewed"
+    st.session_state.last_result = None  # 清除缓存，重新加载
+    st.rerun()
+
+
+def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
+    """渲染完整结果（含答案和解析），管理员和学生订正后可见"""
     score, total = result["score"], result["total"]
     percentage = round(score / total * 100, 1) if total > 0 else 0
 
-    if percentage >= 90:
-        emoji, comment = "🏆", "非常棒！"
-    elif percentage >= 75:
-        emoji, comment = "👍", "做得不错！"
-    elif percentage >= 60:
-        emoji, comment = "💪", "继续加油！"
-    else:
-        emoji, comment = "📚", "别灰心，看看解析！"
+    emoji = "🏆" if percentage >= 90 else ("👍" if percentage >= 75 else ("💪" if percentage >= 60 else "📚"))
+    comment = "非常棒！" if percentage >= 90 else ("做得不错！" if percentage >= 75 else ("继续加油！" if percentage >= 60 else "别灰心！"))
 
     st.markdown(f"## {emoji} {comment}")
     if bank_name:
@@ -394,13 +598,18 @@ def _render_result(result, time_sec, bank_name="", submitted_at=""):
     st.divider()
 
     st.subheader("📋 逐题回顾")
-    st.markdown("*展开每道题查看答案和解析：*")
     for i, r in enumerate(result["results"]):
         q = r["question"]
         icon = "✅" if r["is_correct"] else "❌"
         given = r["given_answer"] or "（未作答）"
-        with st.expander(f"{icon} 第 {i+1} 题 — {q['question'][:50]}{'...' if len(q['question'])>50 else ''}"):
-            st.markdown(f"**题型：**{'🔵 单选题' if q['qtype'] == '单选' else '🟢 判断题'}")
+        error_reason = q.get("error_reason", "")
+
+        title = f"{icon} 第 {i+1} 题 — {q['question'][:50]}{'...' if len(q['question'])>50 else ''}"
+        if error_reason:
+            title += f"  [{error_reason}]"
+
+        with st.expander(title):
+            st.markdown(f"**题型：**{'🔵 单选题' if q['qtype']=='单选' else '🟢 判断题'}")
             st.markdown(f"**题目：** {q['question']}")
             if q["qtype"] == "单选":
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
@@ -414,46 +623,10 @@ def _render_result(result, time_sec, bank_name="", submitted_at=""):
             else:
                 st.markdown(f"　**你的答案：** {given}")
                 st.markdown(f"　**正确答案：** {q['answer']}")
+            if error_reason:
+                st.markdown(f"　**错误原因：** {error_reason}")
             if q.get("explanation"):
                 st.markdown(f"💡 **解析：** {q['explanation']}")
-
-
-def page_student_results():
-    st.title("📊 考试结果")
-    result = st.session_state.last_result
-    time_sec = st.session_state.last_time_sec
-
-    # 处理从历史回顾进入
-    if result is None and st.session_state.review_attempt_id:
-        detail = db.get_attempt_detail(st.session_state.review_attempt_id)
-        if detail:
-            result = {"score": detail["score"], "total": detail["total"], "results": [
-                {"question": a, "given_answer": a["given_answer"], "is_correct": bool(a["is_correct"])}
-                for a in detail["answers"]
-            ]}
-            time_sec = detail.get("time_sec", 0)
-            _render_result(result, time_sec, detail.get("bank_name", ""), detail.get("submitted_at", ""))
-            if st.button("↩️ 返回历史记录", use_container_width=True):
-                st.session_state.review_attempt_id = None
-                st.rerun()
-            return
-
-    if result is None:
-        st.info("还没有考试结果，去「参加考试」完成一次考试吧！")
-        return
-
-    _render_result(result, time_sec)
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("🔄 重新考试", use_container_width=True, type="primary"):
-            reset_exam_state()
-            st.session_state.last_result = None
-            st.session_state.page = "📝 参加考试"
-            st.rerun()
-    with c2:
-        if st.button("📜 查看历史", use_container_width=True):
-            st.session_state.page = "📜 历史记录"
-            st.rerun()
 
 
 # ==================== 学生：历史记录 ====================
@@ -718,6 +891,23 @@ def page_admin_dashboard():
         st.dataframe(student_data, use_container_width=True, hide_index=True)
     else:
         st.info("还没有学生数据。")
+
+    st.divider()
+
+    # 错因统计
+    st.subheader("🔍 错因分布统计")
+    error_stats = db.get_error_reason_stats(campus_id)
+    if error_stats:
+        error_data = [{"错误原因": e['error_reason'], "次数": e['cnt']} for e in error_stats]
+        st.dataframe(error_data, use_container_width=True, hide_index=True)
+        # 简易柱状图
+        total_errors = sum(e['cnt'] for e in error_stats)
+        for e in error_stats:
+            pct = round(e['cnt'] / total_errors * 100, 1) if total_errors > 0 else 0
+            st.markdown(f"**{e['error_reason']}**：{e['cnt']} 次 ({pct}%)")
+            st.progress(e['cnt'] / total_errors if total_errors > 0 else 0)
+    else:
+        st.info("暂无错因数据（学生尚未完成错题订正）")
 
     st.divider()
 

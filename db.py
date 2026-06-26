@@ -103,12 +103,24 @@ def init_db():
             question_id INTEGER NOT NULL,
             given_answer TEXT,
             is_correct INTEGER DEFAULT 0,
+            phase TEXT DEFAULT 'first',
+            review_answer TEXT,
+            error_reason TEXT,
             FOREIGN KEY (attempt_id) REFERENCES exam_attempts(id) ON DELETE CASCADE,
             FOREIGN KEY (question_id) REFERENCES questions(id)
         )
     """)
 
     # ---- 数据库迁移：兼容旧版本 ----
+    # 检查 answers 表是否有新列
+    cols_a = [c[1] for c in cursor.execute("PRAGMA table_info(answers)").fetchall()]
+    if 'phase' not in cols_a:
+        cursor.execute("ALTER TABLE answers ADD COLUMN phase TEXT DEFAULT 'first'")
+    if 'review_answer' not in cols_a:
+        cursor.execute("ALTER TABLE answers ADD COLUMN review_answer TEXT")
+    if 'error_reason' not in cols_a:
+        cursor.execute("ALTER TABLE answers ADD COLUMN error_reason TEXT")
+
     # 检查 users 表是否有 campus_id 列
     cols = [c[1] for c in cursor.execute("PRAGMA table_info(users)").fetchall()]
     if 'campus_id' not in cols:
@@ -555,10 +567,11 @@ def get_attempts(user_id=None, campus_id=None):
 
 
 def get_wrong_questions(user_id, limit=50):
-    """获取某用户的错题列表（最近答错的题目）"""
+    """获取某用户的错题列表"""
     conn = get_conn()
     rows = conn.execute(
-        """SELECT DISTINCT q.*, a.given_answer, a.is_correct, ea.submitted_at
+        """SELECT DISTINCT q.*, a.given_answer, a.is_correct, a.error_reason, a.phase,
+                  ea.submitted_at
            FROM answers a
            JOIN questions q ON a.question_id = q.id
            JOIN exam_attempts ea ON a.attempt_id = ea.id
@@ -567,6 +580,32 @@ def get_wrong_questions(user_id, limit=50):
            LIMIT ?""",
         (user_id, limit)
     ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_error_reason_stats(campus_id=None):
+    """获取错因统计"""
+    conn = get_conn()
+    if campus_id:
+        rows = conn.execute(
+            """SELECT a.error_reason, COUNT(*) as cnt
+               FROM answers a
+               JOIN exam_attempts ea ON a.attempt_id = ea.id
+               JOIN users u ON ea.user_id = u.id
+               WHERE a.error_reason IS NOT NULL AND a.error_reason != '' AND u.campus_id = ?
+               GROUP BY a.error_reason
+               ORDER BY cnt DESC""",
+            (campus_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT a.error_reason, COUNT(*) as cnt
+               FROM answers a
+               WHERE a.error_reason IS NOT NULL AND a.error_reason != ''
+               GROUP BY a.error_reason
+               ORDER BY cnt DESC"""
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -698,7 +737,7 @@ def get_attempt_detail(attempt_id):
 
     answers_rows = conn.execute(
         """SELECT a.*, q.seq, q.qtype, q.question, q.option_a, q.option_b,
-                  q.option_c, q.option_d, q.answer, q.explanation
+                  q.option_c, q.option_d, q.answer, q.explanation, a.phase, a.review_answer, a.error_reason
            FROM answers a
            JOIN questions q ON a.question_id = q.id
            WHERE a.attempt_id = ?
@@ -716,8 +755,19 @@ def save_answers_batch(answers_list):
     """批量保存答案。answers_list 每个元素是 (attempt_id, question_id, given_answer, is_correct)"""
     conn = get_conn()
     conn.executemany(
-        "INSERT INTO answers (attempt_id, question_id, given_answer, is_correct) VALUES (?, ?, ?, ?)",
+        "INSERT INTO answers (attempt_id, question_id, given_answer, is_correct, phase) VALUES (?, ?, ?, ?, 'first')",
         answers_list
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_review_answers(review_list):
+    """保存订正答案。review_list 每个元素是 (attempt_id, question_id, review_answer, is_correct, error_reason)"""
+    conn = get_conn()
+    conn.executemany(
+        "UPDATE answers SET review_answer=?, is_correct=?, error_reason=?, phase='review' WHERE attempt_id=? AND question_id=?",
+        [(r[2], r[3], r[4], r[0], r[1]) for r in review_list]
     )
     conn.commit()
     conn.close()
