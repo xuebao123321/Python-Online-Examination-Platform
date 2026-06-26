@@ -103,3 +103,19 @@ def reset_password(username, new_password, recovery_key, valid_key):
     if ok:
         return True, f"✅ 用户「{username}」密码已重置"
     return False, "重置失败"
+
+
+def ensure_default_admin(username, password):
+    """
+    确保默认超级管理员存在。如果用户表为空或该用户不存在，则自动创建。
+    """
+    existing = db.get_user_by_username(username)
+    if existing:
+        # 更新密码为最新设定（防止密码被改后无法恢复）
+        pwd_hash, salt = hash_password(password)
+        db.reset_user_password(username, pwd_hash, salt)
+        return
+
+    # 创建超级管理员 (campus_id=None)
+    pwd_hash, salt = hash_password(password)
+    db.create_user(username, pwd_hash, salt, 'admin', '系统管理员', None)

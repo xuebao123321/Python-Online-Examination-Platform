@@ -979,6 +979,11 @@ def page_admin_campuses():
 # ==================== 主程序 ====================
 
 def main():
+    # ---- 确保默认超级管理员存在 ----
+    default_user = st.secrets.get("default_admin_user", "admin")
+    default_pass = st.secrets.get("default_admin_pass", "xuxuchang123")
+    auth.ensure_default_admin(default_user, default_pass)
+
     # ---- 未登录 → 显示登录页 ----
     if not st.session_state.logged_in:
         page_login()
