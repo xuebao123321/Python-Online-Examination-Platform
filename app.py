@@ -66,6 +66,17 @@ init_session()
 
 # ==================== 辅助函数 ====================
 
+def clean_text(text):
+    """清理文本：规范化换行为markdown换行"""
+    if not text:
+        return ""
+    import re
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # 单换行加两个空格实现markdown软换行
+    text = text.replace('\n', '  \n')
+    return text.strip()
+
+
 def format_time(seconds):
     if seconds is None:
         return "--:--"
@@ -142,17 +153,17 @@ def page_login():
             # 用户协议
             with st.expander("📜 用户协议（必读）", expanded=False):
                 st.markdown("""
-**Python 在线考试系统用户协议**
+Python 在线考试系统用户协议
 
-1. **版权承诺**：用户承诺上传的试题内容不存在版权侵权，所有因上传内容引发的法律责任由用户独立承担。
+1. 版权承诺：用户承诺上传的试题内容不存在版权侵权，所有因上传内容引发的法律责任由用户独立承担。
 
-2. **平台角色**：平台仅提供考试练习工具和存储服务，不主动审核用户私有题库内容，不享有用户上传题库的任何著作权。
+2. 平台角色：平台仅提供考试练习工具和存储服务，不主动审核用户私有题库内容，不享有用户上传题库的任何著作权。
 
-3. **侵权处理**：平台收到版权方有效侵权通知后，有权立即删除对应题库、限制相关账号使用，由此产生的损失由用户自行承担。
+3. 侵权处理：平台收到版权方有效侵权通知后，有权立即删除对应题库、限制相关账号使用，由此产生的损失由用户自行承担。
 
-4. **赔偿条款**：用户因上传侵权内容给平台造成索赔、罚款、商誉损失的，需全额赔偿平台因此遭受的全部损失。
+4. 赔偿条款：用户因上传侵权内容给平台造成索赔、罚款、商誉损失的，需全额赔偿平台因此遭受的全部损失。
 
-5. **免责声明**：本系统为学习辅助工具，题库内容均由用户自行上传，平台不对题库内容的准确性、合法性负责。
+5. 免责声明：本系统为学习辅助工具，题库内容均由用户自行上传，平台不对题库内容的准确性、合法性负责。
                 """)
 
             terms_agreed = st.checkbox(
@@ -211,7 +222,7 @@ def page_student_exam():
         if unsubmitted:
             bank = db.get_bank_by_id(unsubmitted["bank_id"])
             if bank:
-                st.warning(f"⚠️ 检测到一场未完成的考试：**{bank['name']}**")
+                st.warning(f"⚠️ 检测到一场未完成的考试：{bank['name']}")
                 c1, c2, _ = st.columns(3)
                 with c1:
                     if st.button("▶️ 继续考试", type="primary", use_container_width=True):
@@ -265,7 +276,7 @@ def _show_exam_selector(user):
         for q in qs:
             qtype_summary[q["qtype"]] = qtype_summary.get(q["qtype"], 0) + 1
         qtype_text = "、".join([f"{k} {v}道" for k, v in qtype_summary.items()])
-        st.markdown(f"**📋 {selected_level} {selected_year}** ｜ 共 {len(qs)} 道题（{qtype_text}）")
+        st.markdown(f"📋 {selected_level} {selected_year} ｜ 共 {len(qs)} 道题（{qtype_text}）")
         st.markdown("⏱️ 逐题作答，可前进后退，提交后自动判分。")
         if st.button("🚀 开始考试", type="primary", use_container_width=True):
             _start_exam(bank, user)
@@ -340,7 +351,7 @@ def _show_exam_questions():
             qid = questions[i]["id"]
             answered = bool(st.session_state.answers.get(qid, "").strip().replace("# 在此编写 Python 代码\n", ""))
             if i == idx:
-                label = f"**{i+1}**"
+                label = f"{i+1}"
                 btn_type = "primary"
             elif answered:
                 label = f"✅{i+1}"
@@ -352,7 +363,7 @@ def _show_exam_questions():
                 st.session_state.current_idx = i
                 st.rerun()
 
-    st.markdown(f"**:{timer_color}[{timer_icon} 剩余 {format_time(remaining)}]** ｜ "
+    st.markdown(f":{timer_color}[{timer_icon} 剩余 {format_time(remaining)}] ｜ "
                 f"已答 {answered_count}/{total} ｜ 共 {format_time(total_seconds)}")
 
     st.divider()
@@ -366,7 +377,7 @@ def _show_exam_questions():
     else:
         qtype_badge = "💻 编程题"
     st.markdown(f"### {qtype_badge} · 第 {idx + 1} 题")
-    st.markdown(f"**{current_q['question']}**")
+    st.markdown(f"{clean_text(current_q['question'])}")
 
     qid = current_q["id"]
     current_answer = st.session_state.answers.get(qid, "")
@@ -392,7 +403,7 @@ def _show_exam_questions():
             st.session_state.answers[qid] = tf_map[selected]
     else:
         # 编程题：代码编辑器 + 运行按钮
-        st.markdown("**📝 编写你的 Python 代码：**")
+        st.markdown("📝 编写你的 Python 代码：")
         code = st.text_area(
             "代码编辑器",
             value=current_answer if current_answer else "# 在此编写 Python 代码\n",
@@ -555,14 +566,14 @@ def page_student_results():
             wrong_count += 1
         with st.expander(f"{icon} 第 {i+1} 题 — {q['question'][:60]}{'...' if len(q['question'])>60 else ''}"):
             qtype_label = {'单选': '🔵 单选题', '判断': '🟢 判断题', '编程': '💻 编程题'}.get(q['qtype'], q['qtype'])
-            st.markdown(f"**题型：**{qtype_label}")
-            st.markdown(f"**题目：**{q['question']}")
+            st.markdown(f"题型：{qtype_label}")
+            st.markdown(f"题目：{clean_text(q['question'])}")
             if q['qtype'] == '编程':
                 code = r['given_answer'] or '# 未作答'
                 st.code(code, language="python")
                 st.info("📝 编程题需人工批改，提交后管理员会查看代码")
             else:
-                st.markdown(f"**你的答案：**{r['given_answer'] or '未作答'}")
+                st.markdown(f"你的答案：{r['given_answer'] or '未作答'}")
                 if r["is_correct"]:
                     st.success("✅ 回答正确")
                 else:
@@ -610,7 +621,7 @@ def _show_review_mode():
 
     st.progress((idx + 1) / total_wrong, f"错题 {idx + 1} / {total_wrong}")
     st.markdown(f"### 第 {idx+1} 题")
-    st.markdown(f"**{q['question']}**")
+    st.markdown(f"{clean_text(q['question'])}")
 
     if q["qtype"] == "单选":
         choice_labels, choice_map = [], {}
@@ -634,7 +645,7 @@ def _show_review_mode():
         if selected:
             st.session_state.review_answers[qid] = tf_map[selected]
 
-    st.markdown("**错误原因：**（必选）")
+    st.markdown("错误原因：（必选）")
     reasons = ["粗心马虎", "知识点未掌握", "没有思路", "审题不清", "其他"]
     reason = st.selectbox("选择错误原因", [""] + reasons, key=f"reason_{qid}")
     if reason:
@@ -737,13 +748,13 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
 
         with st.expander(title):
             qtype_label = {'单选': '🔵 单选题', '判断': '🟢 判断题', '编程': '💻 编程题'}.get(q['qtype'], q['qtype'])
-            st.markdown(f"**题型：**{qtype_label}")
-            st.markdown(f"**题目：** {q['question']}")
+            st.markdown(f"题型：{qtype_label}")
+            st.markdown(f"题目： {clean_text(q['question'])}")
             if q["qtype"] == "编程":
                 if given:
                     st.code(given, language="python")
                 if q.get("explanation"):
-                    st.markdown(f"💡 **解析/参考代码：**")
+                    st.markdown(f"💡 解析/参考代码：")
                     st.code(q['explanation'], language="python")
             elif q["qtype"] == "单选":
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
@@ -753,14 +764,14 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
                             mark = " ✅（正确答案）"
                         elif label == given:
                             mark = " ❌（你的答案）"
-                        st.markdown(f"　**{label}**) {q[key]}{mark}")
+                        st.markdown(f"　{label}) {q[key]}{mark}")
             else:
-                st.markdown(f"　**你的答案：** {given}")
-                st.markdown(f"　**正确答案：** {q['answer']}")
+                st.markdown(f"　你的答案： {given}")
+                st.markdown(f"　正确答案： {q['answer']}")
             if error_reason:
-                st.markdown(f"　**错误原因：** {error_reason}")
+                st.markdown(f"　错误原因： {error_reason}")
             if q.get("explanation"):
-                st.markdown(f"💡 **解析：** {q['explanation']}")
+                st.markdown(f"💡 解析： {q['explanation']}")
 
 
 # ==================== 学生：历史记录 ====================
@@ -793,7 +804,7 @@ def page_student_history():
         with st.container():
             c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
             with c1:
-                st.markdown(f"{icon} **{a['bank_name']}**")
+                st.markdown(f"{icon} {a['bank_name']}")
                 st.caption(a.get("submitted_at", ""))
             with c2:
                 st.metric("得分", f"{a['score']}/{a['total']}")
@@ -821,23 +832,23 @@ def page_student_wrong():
         st.success("🎉 太棒了！你没有错题记录。")
         return
 
-    st.markdown(f"共 **{len(wrong_qs)}** 道错题（去重后），按最近考试时间排列：")
+    st.markdown(f"共 {len(wrong_qs)} 道错题（去重后），按最近考试时间排列：")
     st.divider()
 
     for i, q in enumerate(wrong_qs):
         icon = "🔵" if q["qtype"] == "单选" else "🟢"
         with st.expander(f"{icon} {q['qtype']} - {q['question'][:60]}{'...' if len(q['question'])>60 else ''}"):
-            st.markdown(f"**题目：**{q['question']}")
+            st.markdown(f"题目：{clean_text(q['question'])}")
             if q["qtype"] == "单选":
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
                     if q.get(key):
                         mark = " ✅" if label == q["answer"] else (" ❌ 你的答案" if label == q.get("given_answer") else "")
-                        st.markdown(f"　**{label}**) {q[key]}{mark}")
+                        st.markdown(f"　{label}) {q[key]}{mark}")
             else:
-                st.markdown(f"　你的答案：**{q.get('given_answer', '未作答')}**")
-                st.markdown(f"　正确答案：**{q['answer']}**")
+                st.markdown(f"　你的答案：{q.get('given_answer', '未作答')}")
+                st.markdown(f"　正确答案：{q['answer']}")
             if q.get("explanation"):
-                st.info(f"💡 **解析：**{q['explanation']}")
+                st.info(f"💡 解析：{q['explanation']}")
 
 
 # ==================== 管理员：上传题库 ====================
@@ -847,11 +858,11 @@ def page_admin_upload():
 
     with st.expander("📋 CSV 文件格式说明", expanded=False):
         st.markdown("""
-        **必需列名：** `序号,题型,题目,选项A,选项B,选项C,选项D,正确答案,解析`
-        - **题型**：`单选` / `判断` / `编程`
-        - **正确答案**：单选填 A/B/C/D，判断填 对/错，编程题留空或填参考代码
-        - **解析**：编程题可填解题思路或参考代码
-        - **文件编码**：UTF-8
+        必需列名： `序号,题型,题目,选项A,选项B,选项C,选项D,正确答案,解析`
+        - 题型：`单选` / `判断` / `编程`
+        - 正确答案：单选填 A/B/C/D，判断填 对/错，编程题留空或填参考代码
+        - 解析：编程题可填解题思路或参考代码
+        - 文件编码：UTF-8
         """)
 
     col1, col2 = st.columns([2, 1])
@@ -906,7 +917,7 @@ def page_admin_upload():
         # 版权免责声明
         st.markdown("---")
         copyright_agreed = st.checkbox(
-            "⚖️ **版权声明**：我确认上传的试题文件拥有完整著作权或合法授权，未上传未经授权的考试真题。"
+            "⚖️ 版权声明：我确认上传的试题文件拥有完整著作权或合法授权，未上传未经授权的考试真题。"
             "如上传内容侵犯他人知识产权，由上传方承担全部法律责任。平台有权核查、删除侵权文件并封禁账号。",
             value=False,
             key="copyright_agree"
@@ -926,7 +937,7 @@ def page_admin_upload():
                 st.warning(f"⏳ {len(delete_reqs)} 个删除申请待审批")
                 for dr in delete_reqs:
                     with st.container():
-                        st.markdown(f"🗑️ **{dr['name']}**")
+                        st.markdown(f"🗑️ {dr['name']}")
                         st.caption(f"申请者: {dr.get('uploader_name','?')} ｜ {dr.get('campus_name','?')}")
                         ca, cb = st.columns(2)
                         with ca:
@@ -948,7 +959,7 @@ def page_admin_upload():
                 status = ""
                 if b.get('delete_requested') == 1:
                     status = " ⏳(待审批删除)"
-                st.markdown(f"**{b['name']}**  [{count}题]{status}")
+                st.markdown(f"{b['name']}  [{count}题]{status}")
                 st.caption(f"上传者: {b.get('uploader_name','?')} ｜ 校区: {b.get('campus_name','?')} ｜ {b['created_at']}")
 
                 # 删除 / 申请删除
@@ -1074,7 +1085,7 @@ def page_admin_dashboard():
         total_errors = sum(e['cnt'] for e in error_stats)
         for e in error_stats:
             pct = round(e['cnt'] / total_errors * 100, 1) if total_errors > 0 else 0
-            st.markdown(f"**{e['error_reason']}**：{e['cnt']} 次 ({pct}%)")
+            st.markdown(f"{e['error_reason']}：{e['cnt']} 次 ({pct}%)")
             st.progress(e['cnt'] / total_errors if total_errors > 0 else 0)
     else:
         st.info("暂无错因数据（学生尚未完成错题订正）")
@@ -1120,7 +1131,7 @@ def page_admin_students():
         with st.container():
             c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
             with c1:
-                st.markdown(f"**{s['display_name']}**  (@{s['username']})")
+                st.markdown(f"{s['display_name']}  (@{s['username']})")
                 st.caption(f"注册时间：{s['created_at']}")
             with c2:
                 st.metric("考试次数", exam_count)
@@ -1176,7 +1187,7 @@ def page_admin_student_detail():
             with st.container():
                 c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
                 with c1:
-                    st.markdown(f"**{a['bank_name']}**")
+                    st.markdown(f"{a['bank_name']}")
                     st.caption(a.get("submitted_at", ""))
                 with c2:
                     st.metric("得分", f"{a['score']}/{a['total']}")
@@ -1222,7 +1233,7 @@ def page_admin_records():
         with st.container():
             c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
             with c1:
-                st.markdown(f"{icon} **{a.get('user_name', '?')}** — {a['bank_name']}")
+                st.markdown(f"{icon} {a.get('user_name', '?')} — {a['bank_name']}")
                 st.caption(a.get("submitted_at", ""))
             with c2:
                 st.metric("得分", f"{a['score']}/{a['total']}")
@@ -1353,7 +1364,7 @@ def page_admin_campuses():
             with st.container():
                 cc1, cc2, cc3, cc4 = st.columns([3, 1, 1, 1])
                 with cc1:
-                    st.markdown(f"**🏫 {c['name']}**")
+                    st.markdown(f"🏫 {c['name']}")
                     st.caption(f"创建于 {c['created_at']}")
                 with cc2:
                     st.metric("👨‍🎓 学生", len(students))
@@ -1395,7 +1406,7 @@ def main():
             role_label = "👩‍🏫 校区管理员"
         else:
             role_label = "👨‍🎓 学生"
-        st.markdown(f"**{role_label}**：{user['display_name']}")
+        st.markdown(f"{role_label}：{user['display_name']}")
         st.markdown(f"@{user['username']}")
 
         # 显示所属校区
@@ -1435,7 +1446,7 @@ def main():
         # 管理员备份功能
         if is_admin:
             st.markdown("---")
-            st.markdown("💾 **数据管理**")
+            st.markdown("💾 数据管理")
             st.caption("定期备份，防止云端数据丢失")
 
             # 下载备份
