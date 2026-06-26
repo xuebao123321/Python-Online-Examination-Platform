@@ -21,6 +21,7 @@ import db
 import csv_import
 import grader
 import auth
+import code_runner
 
 # ==================== 页面配置 ====================
 st.set_page_config(
@@ -312,7 +313,7 @@ def _show_exam_questions():
     idx = st.session_state.current_idx
     current_q = questions[idx]
     elapsed = get_elapsed_seconds()
-    answered_count = len([a for a in st.session_state.answers.values() if a])
+    answered_count = len([a for a in st.session_state.answers.values() if a and a.strip() and a.strip() != '# 在此编写 Python 代码\n'])
 
     # 顶部状态栏
     ct1, ct2, ct3, ct4 = st.columns([2, 1, 1, 1])
@@ -327,14 +328,20 @@ def _show_exam_questions():
     st.divider()
 
     # 题目
-    qtype_badge = "🔵 单选题" if current_q["qtype"] == "单选" else "🟢 判断题"
+    qtype = current_q["qtype"]
+    if qtype == "单选":
+        qtype_badge = "🔵 单选题"
+    elif qtype == "判断":
+        qtype_badge = "🟢 判断题"
+    else:
+        qtype_badge = "💻 编程题"
     st.markdown(f"### {qtype_badge} · 第 {idx + 1} 题")
     st.markdown(f"**{current_q['question']}**")
 
     qid = current_q["id"]
     current_answer = st.session_state.answers.get(qid, "")
 
-    if current_q["qtype"] == "单选":
+    if qtype == "单选":
         choice_labels, choice_map = [], {}
         for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
             if current_q.get(key):
@@ -346,16 +353,39 @@ def _show_exam_questions():
         selected = st.radio("请选择答案：", choice_labels, index=idx_default, key=f"q_{qid}")
         if selected:
             st.session_state.answers[qid] = choice_map[selected]
-    else:
+    elif qtype == "判断":
         tf_labels = ["对 ✅", "错 ❌"]
         tf_map = {"对 ✅": "对", "错 ❌": "错"}
         current_index = 1 if current_answer == "错" else (0 if current_answer == "对" else None)
         selected = st.radio("请判断：", tf_labels, index=current_index, key=f"q_{qid}", horizontal=True)
         if selected:
             st.session_state.answers[qid] = tf_map[selected]
+    else:
+        # 编程题：代码编辑器 + 运行按钮
+        st.markdown("**📝 编写你的 Python 代码：**")
+        code = st.text_area(
+            "代码编辑器",
+            value=current_answer if current_answer else "# 在此编写 Python 代码\n",
+            height=200,
+            key=f"code_{qid}",
+            label_visibility="collapsed",
+        )
+        st.session_state.answers[qid] = code
 
-    # 当前题作答状态提示
-    if not st.session_state.answers.get(qid):
+        run_col1, run_col2 = st.columns([1, 3])
+        with run_col1:
+            if st.button("▶️ 运行代码", key=f"run_{qid}", use_container_width=True):
+                st.session_state[f"show_run_{qid}"] = True
+        with run_col2:
+            st.caption("代码在浏览器中运行，无需服务器")
+
+        if st.session_state.get(f"show_run_{qid}"):
+            code_runner.show_code_runner(code, height=350)
+        else:
+            code_runner.code_runner_placeholder()
+
+    # 作答提示
+    if qtype != "编程" and not st.session_state.answers.get(qid):
         st.caption("⚠️ 请选择一个答案")
 
     st.divider()
@@ -494,13 +524,19 @@ def page_student_results():
         if not r["is_correct"]:
             wrong_count += 1
         with st.expander(f"{icon} 第 {i+1} 题 — {q['question'][:60]}{'...' if len(q['question'])>60 else ''}"):
-            st.markdown(f"**题型：**{'🔵 单选题' if q['qtype']=='单选' else '🟢 判断题'}")
+            qtype_label = {'单选': '🔵 单选题', '判断': '🟢 判断题', '编程': '💻 编程题'}.get(q['qtype'], q['qtype'])
+            st.markdown(f"**题型：**{qtype_label}")
             st.markdown(f"**题目：**{q['question']}")
-            st.markdown(f"**你的答案：**{r['given_answer'] or '未作答'}")
-            if r["is_correct"]:
-                st.success("✅ 回答正确")
+            if q['qtype'] == '编程':
+                code = r['given_answer'] or '# 未作答'
+                st.code(code, language="python")
+                st.info("📝 编程题需人工批改，提交后管理员会查看代码")
             else:
-                st.error("❌ 回答错误")
+                st.markdown(f"**你的答案：**{r['given_answer'] or '未作答'}")
+                if r["is_correct"]:
+                    st.success("✅ 回答正确")
+                else:
+                    st.error("❌ 回答错误")
 
     st.divider()
 
@@ -670,9 +706,16 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at=""):
             title += f"  [{error_reason}]"
 
         with st.expander(title):
-            st.markdown(f"**题型：**{'🔵 单选题' if q['qtype']=='单选' else '🟢 判断题'}")
+            qtype_label = {'单选': '🔵 单选题', '判断': '🟢 判断题', '编程': '💻 编程题'}.get(q['qtype'], q['qtype'])
+            st.markdown(f"**题型：**{qtype_label}")
             st.markdown(f"**题目：** {q['question']}")
-            if q["qtype"] == "单选":
+            if q["qtype"] == "编程":
+                if given:
+                    st.code(given, language="python")
+                if q.get("explanation"):
+                    st.markdown(f"💡 **解析/参考代码：**")
+                    st.code(q['explanation'], language="python")
+            elif q["qtype"] == "单选":
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
                     if q.get(key):
                         mark = ""

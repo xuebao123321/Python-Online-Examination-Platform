@@ -10,7 +10,7 @@ import io
 REQUIRED_COLUMNS = ["序号", "题型", "题目", "选项A", "选项B", "选项C", "选项D", "正确答案", "解析"]
 
 # 有效的题型
-VALID_QTYPES = ["单选", "判断"]
+VALID_QTYPES = ["单选", "判断", "编程"]
 
 # 单选题有效答案
 VALID_CHOICE_ANSWERS = ["A", "B", "C", "D"]
@@ -100,7 +100,7 @@ def parse_csv(file_obj):
             errors.append(f"⚠️ 第 {row_num} 行：判断题答案「{answer}」无效，应为「对」或「错」，已跳过")
             continue
 
-        # 判断题：选项可以为空，单选题必须有至少两个选项
+        # 判断题和编程题：选项可以为空
         option_a = clean_row.get("选项A", "")
         option_b = clean_row.get("选项B", "")
         option_c = clean_row.get("选项C", "")
@@ -112,12 +112,14 @@ def parse_csv(file_obj):
             if len(filled_options) < 2:
                 errors.append(f"⚠️ 第 {row_num} 行：单选题至少需要填写两个选项，已跳过")
                 continue
-            # 检查答案对应的选项是否存在
             answer_idx = ord(answer) - ord("A")
             answer_option = [option_a, option_b, option_c, option_d][answer_idx]
             if not answer_option:
                 errors.append(f"⚠️ 第 {row_num} 行：正确答案 {answer} 对应的选项为空，已跳过")
                 continue
+        elif qtype == "编程":
+            # 编程题答案字段存储测试用例或评分标准（可选）
+            pass
 
         questions.append({
             "seq": seq,
