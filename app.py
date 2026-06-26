@@ -1103,7 +1103,11 @@ def page_admin_users():
     st.title("🔧 用户管理")
     st.caption("查看所有用户、重置密码")
 
-    recovery_key = st.secrets["recovery_key"]  # 必须在 secrets 中配置
+    try:
+        recovery_key = st.secrets["recovery_key"]
+    except KeyError:
+        st.error("⚠️ 未配置恢复密钥。请在 Streamlit Cloud → Settings → Secrets 中设置 recovery_key")
+        recovery_key = ""
 
     # 用户列表
     st.subheader("👁️ 所有用户")
