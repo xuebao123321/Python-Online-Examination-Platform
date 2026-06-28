@@ -793,16 +793,28 @@ def get_attempts_count(user_id=None, campus_id=None):
 
 
 def get_wrong_questions(user_id, limit=None, offset=0):
-    """获取某用户的错题列表。支持分页。"""
+    """获取某用户的错题列表（含订正状态）。支持分页。
+    返回每道题的最新状态：曾做错过的题目，包含是否已订正正确的标记。"""
     conn = get_conn()
-    sql = """SELECT DISTINCT q.*, a.given_answer, a.is_correct, a.error_reason, a.phase,
-                  ea.submitted_at
-           FROM answers a
-           JOIN questions q ON a.question_id = q.id
-           JOIN exam_attempts ea ON a.attempt_id = ea.id
-           WHERE ea.user_id = ? AND a.is_correct = 0
-           ORDER BY ea.submitted_at DESC"""
-    params = [user_id]
+    sql = """SELECT q.*, a.given_answer, a.is_correct, a.error_reason, a.phase, a.review_answer,
+                    ea.submitted_at,
+                    CASE WHEN a.phase = 'review' AND a.is_correct = 1 THEN 1 ELSE 0 END as was_corrected
+             FROM answers a
+             JOIN questions q ON a.question_id = q.id
+             JOIN exam_attempts ea ON a.attempt_id = ea.id
+             WHERE a.id IN (
+                 SELECT MAX(a2.id) FROM answers a2
+                 JOIN exam_attempts ea2 ON a2.attempt_id = ea2.id
+                 WHERE ea2.user_id = ?
+                 GROUP BY a2.question_id
+             )
+             AND q.id IN (
+                 SELECT DISTINCT a3.question_id FROM answers a3
+                 JOIN exam_attempts ea3 ON a3.attempt_id = ea3.id
+                 WHERE ea3.user_id = ? AND a3.is_correct = 0
+             )
+             ORDER BY ea.submitted_at DESC"""
+    params = [user_id, user_id]
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"
         params.extend([limit, offset])
@@ -812,12 +824,11 @@ def get_wrong_questions(user_id, limit=None, offset=0):
 
 
 def get_wrong_questions_count(user_id):
-    """获取错题总数（用于分页）"""
+    """获取错题总数（用户曾做错过的所有题目，去重）"""
     conn = get_conn()
     row = conn.execute(
-        """SELECT COUNT(DISTINCT q.id) as cnt
+        """SELECT COUNT(DISTINCT a.question_id) as cnt
            FROM answers a
-           JOIN questions q ON a.question_id = q.id
            JOIN exam_attempts ea ON a.attempt_id = ea.id
            WHERE ea.user_id = ? AND a.is_correct = 0""",
         (user_id,)

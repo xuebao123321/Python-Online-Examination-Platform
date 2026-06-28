@@ -843,110 +843,178 @@ def page_student_results():
 
 
 def _show_review_mode():
-    """错题订正模式"""
+    """错题订正模式 — 支持部分提交、循环订正"""
     st.subheader("📝 错题订正")
-    st.caption("请重新作答错题，并选择错误原因。完成后将解锁全部解析。")
 
-    result = st.session_state.last_result
-    wrong_results = [r for r in result["results"] if r["is_correct"] is False]
-    total_wrong = len(wrong_results)
-    idx = st.session_state.get("review_idx", 0)
-
-    if idx >= total_wrong:
-        # 订正完成，提交
-        _submit_review()
+    attempt_id = st.session_state.attempt_id
+    detail = db.get_attempt_detail(attempt_id)
+    if not detail:
+        st.error("考试记录不存在")
+        if st.button("↩️ 返回"):
+            st.session_state.exam_state = "idle"
+            st.session_state.page = "📝 参加考试"
+            st.rerun()
         return
 
-    r = wrong_results[idx]
-    q = r["question"]
-    qid = q["id"]
+    # 筛选仍需订正的题目：is_correct=0 且不是编程题
+    wrong_answers = [a for a in detail["answers"]
+                     if a["is_correct"] == 0 and a.get("qtype") != "编程"]
+    programming_answers = [a for a in detail["answers"]
+                           if a.get("qtype") == "编程"]
 
-    st.progress((idx + 1) / total_wrong, f"错题 {idx + 1} / {total_wrong}")
-    st.markdown(f"### 第 {idx+1} 题")
-    st.markdown(f"{clean_text(q['question'])}")
+    # 全部订正完成 → 自动进入 reviewed
+    if not wrong_answers:
+        st.success("🎉 所有可订正题目已全部通过！")
+        if programming_answers:
+            st.info(f"📝 {len(programming_answers)} 道编程题待人工批改")
+        if st.button("📊 查看完整解析", type="primary", use_container_width=True):
+            st.session_state.exam_state = "reviewed"
+            st.session_state.review_attempt_id = attempt_id
+            st.session_state.last_result = None
+            st.rerun()
+        return
 
-    if q["qtype"] == "单选":
-        choice_labels, choice_map = [], {}
-        for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
-            if q.get(key):
-                text = f"{label}. {q[key]}"
-                choice_labels.append(text)
-                choice_map[text] = label
-        prev = st.session_state.review_answers.get(qid, "")
-        prev_text = next((t for t, l in choice_map.items() if l == prev), None)
-        idx_default = choice_labels.index(prev_text) if prev_text in choice_labels else None
-        selected = st.radio("你的新作答：", choice_labels, index=idx_default, key=f"review_q_{qid}")
-        if selected:
-            st.session_state.review_answers[qid] = choice_map[selected]
-    else:
-        tf_labels = ["对 ✅", "错 ❌"]
-        tf_map = {"对 ✅": "对", "错 ❌": "错"}
-        prev = st.session_state.review_answers.get(qid, "")
-        cur_idx = 1 if prev == "错" else (0 if prev == "对" else None)
-        selected = st.radio("你的新作答：", tf_labels, index=cur_idx, key=f"review_q_{qid}", horizontal=True)
-        if selected:
-            st.session_state.review_answers[qid] = tf_map[selected]
+    total_remaining = len(wrong_answers)
+    st.caption("💡 修改答案并选择错误原因后即可提交。已答对的题目会自动消失，"
+               f"错误的可继续订正。还剩余 **{total_remaining}** 道。")
 
-    st.markdown("错误原因：（必选）")
-    reasons = ["粗心马虎", "知识点未掌握", "没有思路", "审题不清", "其他"]
-    reason = st.selectbox("选择错误原因", [""] + reasons, key=f"reason_{qid}")
-    if reason:
-        st.session_state.review_reasons[qid] = reason
+    if programming_answers:
+        st.info(f"📝 {len(programming_answers)} 道编程题需人工批改，暂不参与订正")
 
     st.divider()
-    nc1, nc2, nc3 = st.columns([1, 1, 2])
-    with nc1:
-        if idx > 0 and st.button("⬅️ 上一题", use_container_width=True):
-            st.session_state.review_idx -= 1
-            st.rerun()
-    with nc2:
-        can_next = qid in st.session_state.review_answers and qid in st.session_state.review_reasons
-        if st.button("下一题 ➡️", use_container_width=True, type="primary", disabled=not can_next):
-            if not can_next:
-                st.warning("请选择答案和错误原因")
-            else:
-                st.session_state.review_idx += 1
-                st.rerun()
-    with nc3:
-        if idx == total_wrong - 1:
-            all_done = all(
-                qid in st.session_state.review_answers and qid in st.session_state.review_reasons
-                for qid in [wr["question"]["id"] for wr in wrong_results]
+
+    # 所有待订正题目渲染为 expander 列表
+    answered_this_round = 0
+    for i, ans in enumerate(wrong_answers):
+        q = ans  # ans 已 JOIN 了题目字段
+        qid = q["question_id"]
+        qtype = q.get("qtype", "")
+
+        has_answer = bool(st.session_state.review_answers.get(qid, "").strip())
+        has_reason = bool(st.session_state.review_reasons.get(qid, ""))
+        is_complete = has_answer and has_reason
+        if is_complete:
+            answered_this_round += 1
+
+        # 构建 expander 标题
+        icon = "✅" if is_complete else "📝"
+        q_text = (q.get("question") or "")[:60]
+        title = f"{icon} 第{q.get('seq', i+1)}题 — {q_text}{'...' if len(q.get('question','') or '') > 60 else ''}"
+        prev_reason = q.get("error_reason", "")
+        if prev_reason:
+            title += f"  [上次原因：{prev_reason}]"
+
+        with st.expander(title, expanded=(not is_complete)):
+            st.markdown(f"**题目：** {clean_text(q.get('question', ''))}")
+
+            # 显示上次作答
+            prev_ans = q.get("review_answer") or q.get("given_answer", "")
+            st.caption(f"上次作答：{prev_ans or '未作答'} ❌")
+
+            # 答题控件
+            if qtype == "单选":
+                choice_labels, choice_map = [], {}
+                for label, key in [("A", "option_a"), ("B", "option_b"),
+                                   ("C", "option_c"), ("D", "option_d")]:
+                    if q.get(key):
+                        text = f"{label}. {q[key]}"
+                        choice_labels.append(text)
+                        choice_map[text] = label
+                prev = st.session_state.review_answers.get(qid, "")
+                prev_text = next((t for t, l in choice_map.items() if l == prev), None)
+                idx_default = choice_labels.index(prev_text) if prev_text in choice_labels else None
+                selected = st.radio("你的新作答：", choice_labels,
+                                    index=idx_default, key=f"review_q_{qid}")
+                if selected:
+                    st.session_state.review_answers[qid] = choice_map[selected]
+            elif qtype == "判断":
+                tf_labels = ["对 ✅", "错 ❌"]
+                tf_map = {"对 ✅": "对", "错 ❌": "错"}
+                prev = st.session_state.review_answers.get(qid, "")
+                cur_idx = 1 if prev == "错" else (0 if prev == "对" else None)
+                selected = st.radio("你的新作答：", tf_labels, index=cur_idx,
+                                    key=f"review_q_{qid}", horizontal=True)
+                if selected:
+                    st.session_state.review_answers[qid] = tf_map[selected]
+
+            # 错误原因
+            reasons = ["粗心马虎", "知识点未掌握", "没有思路", "审题不清", "其他"]
+            prev_reason_val = st.session_state.review_reasons.get(qid, "")
+            reason_idx = reasons.index(prev_reason_val) if prev_reason_val in reasons else 0
+            reason = st.selectbox(
+                "错误原因：（必选）", reasons,
+                index=reason_idx,
+                key=f"reason_{qid}",
             )
-            if st.button("📩 提交订正", type="primary", use_container_width=True, disabled=not all_done):
-                _submit_review()
+            if reason:
+                st.session_state.review_reasons[qid] = reason
+
+    st.divider()
+
+    # 底部按钮
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        submit_label = (f"📩 提交订正（已答 {answered_this_round} 题）"
+                        if answered_this_round > 0 else "📩 提交订正")
+        if st.button(submit_label, type="primary", use_container_width=True,
+                     disabled=(answered_this_round == 0)):
+            if answered_this_round == 0:
+                st.warning("请至少完成一道题的订正（选择答案和错误原因）")
+            else:
+                _submit_review(wrong_answers)
+    with c2:
+        if st.button("🚪 退出订正，查看结果", use_container_width=True):
+            st.session_state.exam_state = "reviewed"
+            st.session_state.review_attempt_id = attempt_id
+            st.session_state.last_result = None
+            st.rerun()
 
 
-def _submit_review():
-    """提交订正"""
-    result = st.session_state.last_result
-    wrong_qids = st.session_state.wrong_qids
+def _submit_review(wrong_answers):
+    """部分提交订正 — 只提交已填写的题目，支持循环订正"""
     review_answers = st.session_state.review_answers
     review_reasons = st.session_state.review_reasons
     attempt_id = st.session_state.attempt_id
 
-    # 构建订正数据
+    # 只收集已填写答案和原因的题目
     review_list = []
-    for qid in wrong_qids:
-        ra = review_answers.get(qid, "")
+    for ans in wrong_answers:
+        qid = ans["question_id"]
+        ra = review_answers.get(qid, "").strip()
         rr = review_reasons.get(qid, "")
-        # 判断订正是否正确
-        correct_q = next((r["question"] for r in result["results"] if r["question"]["id"] == qid), None)
-        is_correct = grader.grade_single(correct_q, ra) if correct_q else False
+        if not ra or not rr:
+            continue  # 跳过本轮未填写的题目
+
+        # 判分
+        q_data = {"qtype": ans.get("qtype"), "answer": ans.get("answer", "")}
+        is_correct = grader.grade_single(q_data, ra)
         review_list.append((attempt_id, qid, ra, 1 if is_correct else 0, rr))
 
-    db.save_review_answers(review_list)
+    if review_list:
+        db.save_review_answers(review_list)
 
-    # 更新考试分数（订正后重新计算）
-    # 获取所有答案（首次 + 订正）
+        # 重新计算总分
+        detail = db.get_attempt_detail(attempt_id)
+        if detail:
+            new_score = sum(1 for a in detail["answers"] if a["is_correct"])
+            db.submit_attempt(attempt_id, new_score, st.session_state.last_time_sec)
+
+    # 清空本轮作答（为下一轮订正准备）
+    st.session_state.review_answers = {}
+    st.session_state.review_reasons = {}
+
+    # 检查是否还有剩余错题（排除编程题）
     detail = db.get_attempt_detail(attempt_id)
     if detail:
-        new_score = sum(1 for a in detail["answers"] if a["is_correct"])
-        db.submit_attempt(attempt_id, new_score, st.session_state.last_time_sec)
+        remaining = [a for a in detail["answers"]
+                     if a["is_correct"] == 0 and a.get("qtype") != "编程"]
+        if not remaining:
+            # 全部订正完成
+            st.session_state.exam_state = "reviewed"
+            st.session_state.review_attempt_id = attempt_id
+            st.session_state.last_result = None
+        # 否则保持在 reviewing 状态，重新渲染剩余错题
 
-    st.session_state.exam_state = "reviewed"
-    st.session_state.review_attempt_id = attempt_id  # 标记从数据库重新加载
-    st.session_state.last_result = None
     st.rerun()
 
 
@@ -1118,6 +1186,7 @@ def page_student_wrong():
         return
 
     st.markdown(f"共 {total} 道错题（去重后），按最近考试时间排列：")
+    st.caption("💡 已订正正确的题目显示全部解析；未订正的题目需先完成订正才能查看正确答案")
     st.divider()
 
     page_key = "wrong_page"
@@ -1125,19 +1194,69 @@ def page_student_wrong():
     wrong_qs = db.get_wrong_questions(user['id'], limit=PAGE_SIZE, offset=page * PAGE_SIZE)
 
     for i, q in enumerate(wrong_qs):
-        icon = "🔵" if q["qtype"] == "单选" else "🟢"
-        with st.expander(f"{icon} {q['qtype']} - {q['question'][:60]}{'...' if len(q['question'])>60 else ''}"):
-            st.markdown(f"题目：{clean_text(q['question'])}")
-            if q["qtype"] == "单选":
+        was_corrected = q.get("was_corrected", 0) == 1
+        qtype = q.get("qtype", "")
+
+        # 图标 + 状态标签
+        icon = "🔵" if qtype == "单选" else ("🟢" if qtype == "判断" else "💻")
+        status_badge = " ✅已订正" if was_corrected else " ⏳待订正"
+
+        with st.expander(f"{icon} {qtype}{status_badge} — {q['question'][:50]}{'...' if len(q.get('question','') or '') > 50 else ''}"):
+            st.markdown(f"题目：{clean_text(q.get('question', ''))}")
+
+            if qtype == "单选":
+                # 显示选项
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
                     if q.get(key):
-                        mark = " ✅" if label == q["answer"] else (" ❌ 学生作答" if label == q.get("given_answer") else "")
+                        marks = []
+                        correct_ans = q.get("answer", "")
+                        given_ans = q.get("given_answer", "")
+                        review_ans = q.get("review_answer", "")
+
+                        if was_corrected:
+                            # 已订正正确 → 完整显示
+                            if label == correct_ans:
+                                marks.append("✅ 正确答案")
+                            if label == given_ans:
+                                marks.append("❌ 原作答")
+                            if review_ans and label == review_ans and review_ans != given_ans:
+                                marks.append("📝 订正作答")
+                        else:
+                            # 未订正 → 只显示学生作答，隐藏正确答案
+                            if label == given_ans:
+                                marks.append("❌ 你的作答")
+
+                        mark = (" " + " / ".join(marks)) if marks else ""
                         st.markdown(f"　{label}) {q[key]}{mark}")
+            elif qtype == "判断":
+                if was_corrected:
+                    st.markdown(f"　原作答：{q.get('given_answer', '未作答')} ❌")
+                    review_ans = q.get("review_answer", "")
+                    if review_ans:
+                        st.markdown(f"　订正作答：{review_ans} ✅")
+                    st.markdown(f"　正确答案：{q.get('answer', '')}")
+                else:
+                    st.markdown(f"　你的作答：{q.get('given_answer', '未作答')} ❌")
             else:
-                st.markdown(f"　学生作答：{q.get('given_answer', '未作答')}")
-                st.markdown(f"　正确作答：{q['answer']}")
-            if q.get("explanation"):
-                st.info(f"💡 解析：{q['explanation']}")
+                # 编程题
+                code = q.get("given_answer") or ""
+                if code and code.strip() and code.strip() != "# 在此编写 Python 代码":
+                    st.code(code, language="python")
+                else:
+                    st.caption("（未作答）")
+                st.info("📝 编程题需人工批改")
+
+            # 错误原因
+            error_reason = q.get("error_reason", "")
+            if error_reason:
+                st.caption(f"📌 错误原因：{error_reason}")
+
+            # 解析：仅已订正正确的题目显示
+            if was_corrected and q.get("explanation"):
+                st.info(f"💡 解析：{clean_text(q['explanation'])}")
+                st.success("🎉 已通过订正掌握本题！")
+            elif not was_corrected and qtype != "编程":
+                st.warning("🔒 完成错题订正后可解锁正确答案和解析")
 
     pagination_bar(page_key, total)
 
