@@ -389,18 +389,35 @@ def _show_exam_selector(user):
         duration_min = bank.get("duration_minutes", 60) or 60
         st.markdown(f"📋 {selected_level} {selected_year} ｜ 共 {len(qs)} 道题（{qtype_text}）｜ ⏱️ {duration_min} 分钟")
 
-        # 考试模式 + 出题顺序
-        cm1, cm2 = st.columns(2)
-        with cm1:
-            exam_mode = st.radio("模式", ["📝 考试模式", "📝 练习模式"],
-                                 format_func=lambda x: x,
-                                 horizontal=True, key="exam_mode_selector")
-        with cm2:
-            if exam_mode == "📝 考试模式":
-                order_mode = st.radio("出题顺序", ["顺序出题", "随机出题"],
-                                      horizontal=True, key="order_mode_selector")
-            else:
-                order_mode = "顺序出题"
+        # 考试模式 + 出题顺序（管理员可控制是否对学生显示）
+        show_mode_selector = bank.get("allow_practice_mode", 0) == 1
+        show_order_selector = bank.get("allow_random_order", 0) == 1
+
+        if show_mode_selector:
+            cm1, cm2 = st.columns(2)
+            with cm1:
+                exam_mode = st.radio("模式", ["📝 考试模式", "📝 练习模式"],
+                                     format_func=lambda x: x,
+                                     horizontal=True, key="exam_mode_selector")
+            with cm2:
+                if exam_mode == "📝 考试模式" and show_order_selector:
+                    order_mode = st.radio("出题顺序", ["顺序出题", "随机出题"],
+                                          horizontal=True, key="order_mode_selector")
+                else:
+                    order_mode = "顺序出题"
+        else:
+            # 隐藏模式选择，默认考试模式
+            exam_mode = "📝 考试模式"
+            cm1, cm2 = st.columns(2)
+            with cm1:
+                st.markdown("📝 **考试模式**")
+            with cm2:
+                if show_order_selector:
+                    order_mode = st.radio("出题顺序", ["顺序出题", "随机出题"],
+                                          horizontal=True, key="order_mode_selector")
+                else:
+                    order_mode = "顺序出题"
+                    st.markdown("**出题顺序：** 顺序出题")
 
         description = "⏱️ 逐题作答，提交后自动判分。" if exam_mode == "📝 考试模式" else "💡 每题答后立即显示解析，无倒计时，不记录成绩。"
         st.markdown(description)
@@ -1225,6 +1242,17 @@ def page_admin_upload():
         duration_minutes = st.number_input("⏱️ 考试时长（分钟）", min_value=1, max_value=180, value=60, step=5,
                                            help="学生在考试模式下的倒计时时长，练习模式不受此限制")
 
+        # 学生界面显示控制（防作弊）
+        st.divider()
+        st.markdown("##### 🔒 学生界面显示控制")
+        sc3, sc4 = st.columns(2)
+        with sc3:
+            allow_practice_mode = 1 if st.checkbox("允许练习模式", value=False,
+                                                    help="勾选后学生可以看到并选择「练习模式」；不勾选则隐藏，学生只能考试") else 0
+        with sc4:
+            allow_random_order = 1 if st.checkbox("允许随机出题", value=False,
+                                                   help="勾选后学生可以看到并选择「随机出题」；不勾选则隐藏，学生只能顺序出题") else 0
+
         # 超级管理员需要选择目标校区
         if is_super:
             campuses = db.get_all_campuses()
@@ -1340,13 +1368,15 @@ def page_admin_upload():
             c_a, c_b = st.columns(2)
             with c_a:
                 if st.button("✅ 确认替换", type="primary"):
-                    db.replace_bank(existing["id"], bank_name, level.strip(), year, uid, cid, duration_minutes)
+                    db.replace_bank(existing["id"], bank_name, level.strip(), year, uid, cid, duration_minutes,
+                                    allow_practice_mode=allow_practice_mode, allow_random_order=allow_random_order)
                     _do_import(existing["id"], questions, bank_name, user, uploaded_file.name)
             with c_b:
                 if st.button("❌ 取消"):
                     st.rerun()
         else:
-            bank_id = db.create_bank(bank_name, level.strip(), year, uid, cid, duration_minutes)
+            bank_id = db.create_bank(bank_name, level.strip(), year, uid, cid, duration_minutes,
+                                      allow_practice_mode=allow_practice_mode, allow_random_order=allow_random_order)
             if bank_id:
                 _do_import(bank_id, questions, bank_name, user, uploaded_file.name)
             else:

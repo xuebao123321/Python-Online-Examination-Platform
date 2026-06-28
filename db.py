@@ -162,6 +162,10 @@ def init_db():
         cursor.execute("ALTER TABLE question_banks ADD COLUMN delete_requested INTEGER DEFAULT 0")
     if 'duration_minutes' not in cols3:
         cursor.execute("ALTER TABLE question_banks ADD COLUMN duration_minutes INTEGER DEFAULT 60")
+    if 'allow_practice_mode' not in cols3:
+        cursor.execute("ALTER TABLE question_banks ADD COLUMN allow_practice_mode INTEGER DEFAULT 0")
+    if 'allow_random_order' not in cols3:
+        cursor.execute("ALTER TABLE question_banks ADD COLUMN allow_random_order INTEGER DEFAULT 0")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS upload_logs (
@@ -437,14 +441,15 @@ def get_all_users(campus_id=None):
 
 # ==================== 题库操作 ====================
 
-def create_bank(name, level, year, uploader_id=None, campus_id=None, duration_minutes=60):
+def create_bank(name, level, year, uploader_id=None, campus_id=None, duration_minutes=60,
+                 allow_practice_mode=0, allow_random_order=0):
     """创建题库，返回 bank_id。如果已存在同 level+year 的题库则返回 None"""
     conn = get_conn()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO question_banks (name, level, year, uploader_id, campus_id, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (name, level, year, uploader_id, campus_id, duration_minutes, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            "INSERT INTO question_banks (name, level, year, uploader_id, campus_id, duration_minutes, allow_practice_mode, allow_random_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, level, year, uploader_id, campus_id, duration_minutes, allow_practice_mode, allow_random_order, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         )
         conn.commit()
         return cursor.lastrowid
@@ -538,13 +543,14 @@ def delete_bank(bank_id):
     conn.close()
 
 
-def replace_bank(bank_id, name, level, year, uploader_id=None, campus_id=None, duration_minutes=60):
+def replace_bank(bank_id, name, level, year, uploader_id=None, campus_id=None, duration_minutes=60,
+                  allow_practice_mode=0, allow_random_order=0):
     """替换题库：删除旧题目数据，更新基本信息"""
     conn = get_conn()
     conn.execute("DELETE FROM questions WHERE bank_id = ?", (bank_id,))
     conn.execute(
-        "UPDATE question_banks SET name=?, level=?, year=?, uploader_id=?, campus_id=?, duration_minutes=?, created_at=?, delete_requested=0 WHERE id=?",
-        (name, level, year, uploader_id, campus_id, duration_minutes, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), bank_id)
+        "UPDATE question_banks SET name=?, level=?, year=?, uploader_id=?, campus_id=?, duration_minutes=?, allow_practice_mode=?, allow_random_order=?, created_at=?, delete_requested=0 WHERE id=?",
+        (name, level, year, uploader_id, campus_id, duration_minutes, allow_practice_mode, allow_random_order, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), bank_id)
     )
     conn.commit()
     conn.close()
