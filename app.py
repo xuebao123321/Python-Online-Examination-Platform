@@ -1130,7 +1130,7 @@ def page_student_history():
         st.info("还没有考试记录。去「参加考试」完成第一次考试吧！🚀")
         return
 
-    # 汇总统计使用全部数据（考试总数通常不会太大）
+    # 汇总统计（只用基本字段，不加 review stats JOIN 以提升速度）
     all_attempts = db.get_attempts(user_id=user['id'])
     total_exams = len(all_attempts)
     avg_pct = round(sum(a["score"] / max(a["total"], 1) * 100 for a in all_attempts) / total_exams, 1) if total_exams > 0 else 0
@@ -1147,11 +1147,16 @@ def page_student_history():
 
     page_key = "history_page"
     page = st.session_state.get(page_key, 0)
-    attempts = db.get_attempts(user_id=user['id'], limit=PAGE_SIZE, offset=page * PAGE_SIZE)
+    attempts = db.get_attempts_with_review_stats(user_id=user['id'], limit=PAGE_SIZE, offset=page * PAGE_SIZE)
 
     for a in attempts:
         pct = round(a["score"] / a["total"] * 100, 1) if a["total"] > 0 else 0
         icon = "🟢" if pct >= 90 else ("🟡" if pct >= 60 else "🔴")
+
+        wrong_count = int(a.get("wrong_count") or 0)
+        corrected_count = int(a.get("corrected_count") or 0)
+        uncorrected_count = int(a.get("uncorrected_count") or 0)
+
         with st.container():
             c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
             with c1:
@@ -1169,6 +1174,17 @@ def page_student_history():
                     st.session_state.last_result = None
                     st.session_state.page = "📊 考试结果"
                     st.rerun()
+
+            # 订正状态行
+            if wrong_count == 0:
+                st.markdown("🎉 全部正确，无需订正")
+            elif uncorrected_count == 0 and corrected_count > 0:
+                st.markdown(f"✅ 错题已全部订正通过（原始 {wrong_count} 题 → 当前全部正确）")
+            elif uncorrected_count > 0 and corrected_count > 0:
+                st.markdown(f"⏳ 已订正 {corrected_count} 题，还有 **{uncorrected_count}** 题待订正")
+            elif uncorrected_count > 0 and corrected_count == 0:
+                st.markdown(f"📝 **{uncorrected_count}** 道错题未订正")
+
             st.divider()
 
     pagination_bar(page_key, total)

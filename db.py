@@ -792,6 +792,82 @@ def get_attempts_count(user_id=None, campus_id=None):
     return int(row["cnt"]) if row else 0
 
 
+def get_attempt_review_stats(attempt_id):
+    """获取单次考试的订正统计。
+    返回 {total_answers, wrong_count, corrected_count, uncorrected_count,
+          original_score, current_score, error_reasons: [{reason, cnt}]}"""
+    conn = get_conn()
+
+    # 基本统计：从 answers JOIN questions 聚合
+    row = conn.execute("""
+        SELECT
+            COUNT(*) as total_answers,
+            COUNT(CASE WHEN q.qtype != '编程' AND (a.phase = 'review' OR (a.phase = 'first' AND a.is_correct = 0)) THEN 1 END) as wrong_count,
+            COUNT(CASE WHEN a.phase = 'review' AND a.is_correct = 1 AND q.qtype != '编程' THEN 1 END) as corrected_count,
+            COUNT(CASE WHEN a.is_correct = 0 AND q.qtype != '编程' THEN 1 END) as uncorrected_count,
+            COUNT(CASE WHEN a.phase = 'first' AND a.is_correct = 1 AND q.qtype != '编程' THEN 1 END) as original_score
+        FROM answers a
+        JOIN questions q ON a.question_id = q.id
+        WHERE a.attempt_id = ?
+    """, (attempt_id,)).fetchone()
+
+    if not row:
+        conn.close()
+        return None
+
+    # 当前得分从 exam_attempts 读取
+    current = conn.execute(
+        "SELECT score FROM exam_attempts WHERE id = ?", (attempt_id,)
+    ).fetchone()
+    current_score = int(current["score"]) if current and current["score"] is not None else 0
+
+    # 错因分布
+    reasons = conn.execute("""
+        SELECT a.error_reason, COUNT(*) as cnt
+        FROM answers a
+        JOIN questions q ON a.question_id = q.id
+        WHERE a.attempt_id = ? AND a.error_reason IS NOT NULL AND a.error_reason != ''
+        GROUP BY a.error_reason
+        ORDER BY cnt DESC
+    """, (attempt_id,)).fetchall()
+
+    conn.close()
+    return {
+        "total_answers": int(row["total_answers"]) if row["total_answers"] else 0,
+        "wrong_count": int(row["wrong_count"] or 0),
+        "corrected_count": int(row["corrected_count"] or 0),
+        "uncorrected_count": int(row["uncorrected_count"] or 0),
+        "original_score": int(row["original_score"] or 0),
+        "current_score": current_score,
+        "error_reasons": [{"reason": r["error_reason"], "cnt": int(r["cnt"])} for r in reasons],
+    }
+
+
+def get_attempts_with_review_stats(user_id, limit=None, offset=0):
+    """批量获取用户的考试记录及订正统计（避免 N+1 查询）。
+    返回每条 attempt 包含 wrong_count / corrected_count / uncorrected_count / original_score。"""
+    conn = get_conn()
+    sql = """SELECT ea.*, qb.name as bank_name, qb.level, qb.year,
+                    COUNT(CASE WHEN q.qtype != '编程' AND (a.phase = 'review' OR (a.phase = 'first' AND a.is_correct = 0)) THEN 1 END) as wrong_count,
+                    COUNT(CASE WHEN a.phase = 'review' AND a.is_correct = 1 AND q.qtype != '编程' THEN 1 END) as corrected_count,
+                    SUM(CASE WHEN a.is_correct = 0 AND q.qtype != '编程' THEN 1 ELSE 0 END) as uncorrected_count,
+                    COUNT(CASE WHEN a.phase = 'first' AND a.is_correct = 1 AND q.qtype != '编程' THEN 1 END) as original_score
+             FROM exam_attempts ea
+             JOIN question_banks qb ON ea.bank_id = qb.id
+             LEFT JOIN answers a ON a.attempt_id = ea.id
+             LEFT JOIN questions q ON a.question_id = q.id
+             WHERE ea.user_id = ? AND ea.submitted_at IS NOT NULL
+             GROUP BY ea.id
+             ORDER BY ea.submitted_at DESC"""
+    params = [user_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_wrong_questions(user_id, limit=None, offset=0):
     """获取某用户的错题列表（含订正状态）。支持分页。
     返回每道题的最新状态：曾做错过的题目，包含是否已订正正确的标记。"""
