@@ -128,6 +128,7 @@ def init_session():
         "review_reasons": {},
         "wrong_qids": [],
         "is_practice": False,
+        "marked_questions": set(),
         "last_activity": time.time(),
     }
     for key, value in defaults.items():
@@ -359,9 +360,36 @@ def page_student_exam():
 
 def _show_exam_selector(user):
     campus_id = user.get('campus_id')
+    is_first_time = db.get_attempts_count(user_id=user['id']) == 0
+
     levels = db.get_all_levels(campus_id)
+
+    # ---- 首次使用引导 ----
+    if is_first_time:
+        if not levels:
+            st.info("""
+            🎓 **欢迎来到在线考试练习系统！**
+
+            开始步骤：
+            1️⃣ 等待管理员上传题库（当前还没有题库，请联系你的老师）
+            2️⃣ 题库就绪后，在这里选择级别和年月
+            3️⃣ 点击「开始考试」即可作答
+
+            📌 **小贴士：**
+            - 考试模式有倒计时，练习模式无时间限制
+            - 考完后可以订正错题，订正正确后解锁全部解析
+            - 错题本会记录你所有未掌握的题目
+            - 在错题本中可以使用「错题重练」功能加强记忆
+            """)
+        else:
+            st.success("""
+            🎓 **欢迎！** 选择下方级别和年月，开始你的第一次考试吧！
+            💡 建议先从练习模式开始熟悉题型，练习模式无时间限制、每题即时反馈。
+            """)
+
     if not levels:
-        st.info("📚 还没有题库，请联系管理员上传。")
+        if not is_first_time:
+            st.info("📚 还没有题库，请联系管理员上传。")
         return
 
     col1, col2, col3 = st.columns(3)
@@ -615,9 +643,13 @@ def _show_exam_questions():
         with nav_cols[col_idx]:
             qid = questions[i]["id"]
             answered = bool(st.session_state.answers.get(qid, "").strip().replace("# 在此编写 Python 代码\n", ""))
+            is_marked = qid in st.session_state.marked_questions
             if i == idx:
                 label = f"{i+1}"
                 btn_type = "primary"
+            elif is_marked:
+                label = f"🚩{i+1}"
+                btn_type = "secondary"
             elif answered:
                 label = f"✅{i+1}"
                 btn_type = "secondary"
@@ -720,6 +752,14 @@ def _show_exam_questions():
     if qtype != "编程" and not st.session_state.answers.get(qid):
         st.caption("⚠️ 请选择一个答案")
 
+    # 标记功能
+    marked = qid in st.session_state.marked_questions
+    mark_label = "🚩 取消标记" if marked else "🚩 标记此题（提交前复查）"
+    if st.checkbox(mark_label, value=marked, key=f"mark_{qid}"):
+        st.session_state.marked_questions.add(qid)
+    else:
+        st.session_state.marked_questions.discard(qid)
+
     st.divider()
 
     # 时间到自动提交（仅考试模式）
@@ -764,13 +804,30 @@ def _show_exam_questions():
                 st.rerun()
         with nc4:
             unanswered = total - answered_count
+
+            # 标记题目提示
+            marked_count = len(st.session_state.marked_questions)
+            if marked_count > 0:
+                marked_unanswered = [i+1 for i, q in enumerate(questions)
+                                     if q["id"] in st.session_state.marked_questions
+                                     and not st.session_state.answers.get(q["id"], "").strip()]
+                if marked_unanswered:
+                    st.caption(f"🚩 标记了 {marked_count} 题，其中 {len(marked_unanswered)} 题未作答")
+
             label = "📩 提交试卷" if unanswered == 0 else f"📩 提交（{unanswered}题未答）"
             submit_clicked = st.button(label, type="primary", use_container_width=True)
 
             if submit_clicked:
+                # 检查标记题目
+                marked_unanswered_all = [i+1 for i, q in enumerate(questions)
+                                         if q["id"] in st.session_state.marked_questions
+                                         and not st.session_state.answers.get(q["id"], "").strip()]
                 if unanswered > 0 and not st.session_state.get("confirm_submit", False):
                     st.session_state.confirm_submit = True
                     st.warning(f"⚠️ 还有 {unanswered} 道题未作答！未答题目将计 0 分。")
+                    if marked_count > 0:
+                        st.info(f"🚩 你标记了 {marked_count} 道题需要复查"
+                                + (f"（其中 {len(marked_unanswered_all)} 题未作答）" if marked_unanswered_all else "，已全部作答"))
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.button("✅ 确认提交，不再检查", type="primary", use_container_width=True):
