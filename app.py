@@ -1502,9 +1502,24 @@ def page_admin_campuses():
                 with cc3:
                     st.metric("👩‍🏫 管理员", len(admins))
                 with cc4:
-                    if st.button("🗑️ 删除", key=f"del_campus_{c['id']}", use_container_width=True):
-                        db.delete_campus(c['id'])
-                        st.rerun()
+                    delete_key = f"del_campus_{c['id']}"
+                    confirm_key = f"confirm_del_campus_{c['id']}"
+                    if st.session_state.get(confirm_key):
+                        st.error(f"⚠️ 确认删除「{c['name']}」？此操作不可撤销，将删除该校区所有学生、考试记录和题库！")
+                        cc_a, cc_b = st.columns(2)
+                        with cc_a:
+                            if st.button("✅ 确认删除", key=f"do_{c['id']}", use_container_width=True, type="primary"):
+                                db.delete_campus(c['id'])
+                                st.session_state[confirm_key] = False
+                                st.rerun()
+                        with cc_b:
+                            if st.button("❌ 取消", key=f"cancel_{c['id']}", use_container_width=True):
+                                st.session_state[confirm_key] = False
+                                st.rerun()
+                    else:
+                        if st.button("🗑️ 删除", key=delete_key, use_container_width=True):
+                            st.session_state[confirm_key] = True
+                            st.rerun()
                 st.divider()
 
 
@@ -1512,9 +1527,21 @@ def page_admin_campuses():
 
 def main():
     # ---- 确保默认超级管理员存在 ----
-    default_user = st.secrets.get("default_admin_user", "admin")
-    default_pass = st.secrets.get("default_admin_pass", "xuxuchang123")
-    auth.ensure_default_admin(default_user, default_pass)
+    # 仅在 secrets 中显式配置了管理员账号密码时才自动创建，不再使用硬编码默认值
+    try:
+        default_user = st.secrets.get("default_admin_user", "")
+        default_pass = st.secrets.get("default_admin_pass", "")
+    except Exception:
+        default_user = ""
+        default_pass = ""
+
+    if default_user and default_pass:
+        auth.ensure_default_admin(default_user, default_pass)
+    else:
+        # 检查是否已存在管理员，若没有则提示配置
+        existing = db.get_user_by_username(default_user or "admin")
+        if not existing:
+            print("[系统提示] 未检测到默认管理员账号。请在 Streamlit Cloud → Settings → Secrets 中配置 default_admin_user 和 default_admin_pass。")
 
     # ---- 刷新免登录：URL中有用户参数则自动恢复 ----
     if not st.session_state.logged_in and st.query_params.get("user"):

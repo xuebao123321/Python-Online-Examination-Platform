@@ -5,8 +5,43 @@
 
 import hashlib
 import os
+import time
 import db
 from datetime import datetime
+
+# ==================== 登录限流 ====================
+# 内存计数器：{username: {"failures": int, "locked_until": float}}
+_login_failures = {}
+MAX_FAILURES = 5        # 连续失败次数上限
+LOCK_MINUTES = 5         # 锁定时长（分钟）
+
+
+def _check_login_lock(username):
+    """检查是否被锁定。返回 (is_locked: bool, wait_seconds: int)"""
+    record = _login_failures.get(username)
+    if not record:
+        return False, 0
+    if record.get("locked_until") and time.time() < record["locked_until"]:
+        wait = int(record["locked_until"] - time.time())
+        return True, max(wait, 1)
+    # 锁定已过期，清除记录
+    if record.get("locked_until") and time.time() >= record["locked_until"]:
+        _login_failures.pop(username, None)
+    return False, 0
+
+
+def _record_login_failure(username):
+    """记录一次登录失败"""
+    record = _login_failures.get(username, {"failures": 0, "locked_until": 0})
+    record["failures"] += 1
+    if record["failures"] >= MAX_FAILURES:
+        record["locked_until"] = time.time() + LOCK_MINUTES * 60
+    _login_failures[username] = record
+
+
+def _clear_login_failures(username):
+    """登录成功后清除失败记录"""
+    _login_failures.pop(username, None)
 
 
 def hash_password(password, salt=None):
@@ -75,15 +110,28 @@ def login_user(username, password):
     if not username or not password:
         return False, "请输入用户名和密码", None
 
+    # 检查是否被锁定
+    locked, wait = _check_login_lock(username)
+    if locked:
+        minutes = wait // 60
+        seconds = wait % 60
+        if minutes > 0:
+            return False, f"账号已临时锁定，请 {minutes} 分 {seconds} 秒后再试", None
+        return False, f"账号已临时锁定，请 {seconds} 秒后再试", None
+
     user = db.get_user_by_username(username)
     if not user:
+        _record_login_failure(username)
         return False, "用户名不存在", None
 
     # 验证密码
     pwd_hash, _ = hash_password(password, user['salt'])
     if pwd_hash != user['password_hash']:
+        _record_login_failure(username)
         return False, "密码错误", None
 
+    # 登录成功，清除失败记录
+    _clear_login_failures(username)
     return True, f"登录成功！欢迎回来，{user['display_name']}！", user
 
 

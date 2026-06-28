@@ -1014,12 +1014,33 @@ def ensure_local_backup(campus_id=None):
 
 def restore_from_sqlite(file_path):
     """从本地 SQLite 备份文件恢复到当前数据库。
-    适用于 Turso 云数据库和本地 SQLite 两种模式。"""
+    适用于 Turso 云数据库和本地 SQLite 两种模式。
+    恢复前会校验文件是否为合法备份。"""
     import sqlite3
 
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"备份文件不存在: {file_path}")
 
+    # ---- 校验备份文件 ----
+    try:
+        test_conn = sqlite3.connect(file_path)
+        tables = test_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        table_names = set(t[0] for t in tables)
+        test_conn.close()
+    except sqlite3.DatabaseError as e:
+        raise ValueError(f"上传的文件不是有效的 SQLite 数据库：{e}")
+
+    required_tables = {'users', 'questions', 'question_banks'}
+    missing = required_tables - table_names
+    if missing:
+        raise ValueError(
+            f"备份文件缺少核心表：{', '.join(missing)}。"
+            f"请上传由本系统导出的合法 .db 备份文件。"
+        )
+
+    # ---- 执行恢复 ----
     dst = get_conn()  # 目标数据库（Turso 或本地 SQLite）
     src = sqlite3.connect(file_path)
     src.row_factory = sqlite3.Row
