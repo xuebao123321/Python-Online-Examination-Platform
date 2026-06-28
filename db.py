@@ -873,7 +873,7 @@ def get_wrong_questions(user_id, limit=None, offset=0):
     返回每道题的最新状态：曾做错过的题目，包含是否已订正正确的标记。"""
     conn = get_conn()
     sql = """SELECT q.*, a.given_answer, a.is_correct, a.error_reason, a.phase, a.review_answer,
-                    ea.submitted_at,
+                    ea.submitted_at, ea.id as attempt_id,
                     CASE WHEN a.phase = 'review' AND a.is_correct = 1 THEN 1 ELSE 0 END as was_corrected
              FROM answers a
              JOIN questions q ON a.question_id = q.id

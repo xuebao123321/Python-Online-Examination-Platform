@@ -1234,7 +1234,7 @@ def page_student_history():
         uncorrected_count = int(a.get("uncorrected_count") or 0)
 
         with st.container():
-            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
+            c1, c2, c3, c4, c5 = st.columns([3, 1.5, 1.5, 1.5, 1.5])
             with c1:
                 st.markdown(f"{icon} {a['bank_name']}")
                 st.caption(a.get("submitted_at", ""))
@@ -1245,11 +1245,23 @@ def page_student_history():
             with c4:
                 st.metric("用时", format_time(a.get("time_sec", 0)))
             with c5:
-                if st.button("🔍 详情", key=f"h_{a['id']}", use_container_width=True):
-                    st.session_state.review_attempt_id = a["id"]
-                    st.session_state.last_result = None
-                    st.session_state.page = "📊 考试结果"
-                    st.rerun()
+                if uncorrected_count > 0:
+                    # 有未订正错题 → 主按钮是"继续订正"
+                    if st.button("📝 继续订正", key=f"fix_{a['id']}", use_container_width=True, type="primary"):
+                        st.session_state.attempt_id = a["id"]
+                        st.session_state.last_time_sec = a.get("time_sec", 0)
+                        st.session_state.exam_state = "reviewing"
+                        st.session_state.page = "📊 考试结果"
+                        st.rerun()
+                else:
+                    st.button("✅ 已通过", key=f"done_{a['id']}", use_container_width=True, disabled=True)
+
+            # 详情按钮在第二行
+            if st.button("🔍 详情", key=f"h_{a['id']}", use_container_width=True):
+                st.session_state.review_attempt_id = a["id"]
+                st.session_state.last_result = None
+                st.session_state.page = "📊 考试结果"
+                st.rerun()
 
             # 订正状态行
             if wrong_count == 0:
@@ -1349,6 +1361,14 @@ def page_student_wrong():
                 st.success("🎉 已通过订正掌握本题！")
             elif not was_corrected and qtype != "编程":
                 st.warning("🔒 完成错题订正后可解锁正确答案和解析")
+                # 去订正按钮
+                attempt_id = q.get("attempt_id")
+                if attempt_id:
+                    if st.button("📝 去订正本题", key=f"goto_fix_{q['id']}_{attempt_id}", use_container_width=True):
+                        st.session_state.attempt_id = attempt_id
+                        st.session_state.exam_state = "reviewing"
+                        st.session_state.page = "📊 考试结果"
+                        st.rerun()
 
     pagination_bar(page_key, total)
 
