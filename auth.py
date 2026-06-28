@@ -80,8 +80,10 @@ def register_user(username, password, role='student', display_name='', campus_id
     if existing:
         return False, f"用户名「{username}」已被注册", None
 
-    if not password or len(password) < 4:
-        return False, "密码至少需要4个字符", None
+    if not password or len(password) < 6:
+        return False, "密码至少需要6个字符", None
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        return False, "密码必须同时包含字母和数字", None
 
     if role not in ('student', 'admin'):
         return False, "无效的用户角色", None

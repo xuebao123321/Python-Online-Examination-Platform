@@ -127,6 +127,7 @@ def init_session():
         "review_answers": {},
         "review_reasons": {},
         "wrong_qids": [],
+        "is_practice": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -243,7 +244,8 @@ def page_login():
             # ---- 注册 ----
             st.subheader("📝 注册新账号")
             reg_user = st.text_input("用户名", placeholder="至少2个字符", key="reg_user")
-            reg_pwd = st.text_input("密码", type="password", placeholder="至少4个字符", key="reg_pwd")
+            reg_pwd = st.text_input("密码", type="password", placeholder="至少6个字符，需包含字母和数字", key="reg_pwd")
+            st.caption("🔒 至少6个字符，必须同时包含字母和数字")
             reg_pwd2 = st.text_input("确认密码", type="password", placeholder="再次输入密码", key="reg_pwd2")
             reg_display = st.text_input("显示名称", placeholder="你的姓名或昵称", key="reg_display")
             # 用户协议
@@ -372,25 +374,66 @@ def _show_exam_selector(user):
         for q in qs:
             qtype_summary[q["qtype"]] = qtype_summary.get(q["qtype"], 0) + 1
         qtype_text = "、".join([f"{k} {v}道" for k, v in qtype_summary.items()])
-        st.markdown(f"📋 {selected_level} {selected_year} ｜ 共 {len(qs)} 道题（{qtype_text}）")
-        st.markdown("⏱️ 逐题作答，可前进后退，提交后自动判分。")
-        if st.button("🚀 开始考试", type="primary", use_container_width=True):
-            _start_exam(bank, user)
+        duration_min = bank.get("duration_minutes", 60) or 60
+        st.markdown(f"📋 {selected_level} {selected_year} ｜ 共 {len(qs)} 道题（{qtype_text}）｜ ⏱️ {duration_min} 分钟")
+
+        # 考试模式 + 出题顺序
+        cm1, cm2 = st.columns(2)
+        with cm1:
+            exam_mode = st.radio("模式", ["📝 考试模式", "📝 练习模式"],
+                                 format_func=lambda x: x,
+                                 horizontal=True, key="exam_mode_selector")
+        with cm2:
+            if exam_mode == "📝 考试模式":
+                order_mode = st.radio("出题顺序", ["顺序出题", "随机出题"],
+                                      horizontal=True, key="order_mode_selector")
+            else:
+                order_mode = "顺序出题"
+
+        description = "⏱️ 逐题作答，提交后自动判分。" if exam_mode == "📝 考试模式" else "💡 每题答后立即显示解析，无倒计时，不记录成绩。"
+        st.markdown(description)
+
+        btn_label = "🚀 开始考试" if exam_mode == "📝 考试模式" else "📝 开始练习"
+        if st.button(btn_label, type="primary", use_container_width=True):
+            _start_exam(bank, user, is_practice=(exam_mode == "📝 练习模式"),
+                        shuffle=(order_mode == "随机出题"))
 
 
-def _start_exam(bank, user):
+def _start_exam(bank, user, is_practice=False, shuffle=False):
+    import random
     questions = db.get_questions(bank["id"])
     if not questions:
         st.error("题库为空！")
         return
-    attempt_id = db.create_attempt(user['id'], bank["id"], len(questions))
-    st.session_state.exam_state = "in_progress"
-    st.session_state.questions = questions
-    st.session_state.current_idx = 0
-    st.session_state.answers = {}
-    st.session_state.start_time = time.time()
-    st.session_state.total_time = 3600  # 默认60分钟
-    st.session_state.attempt_id = attempt_id
+
+    # 随机出题
+    if shuffle:
+        random.shuffle(questions)
+
+    # 考试时长从题库配置读取（默认60分钟）
+    duration_min = bank.get("duration_minutes", 60) or 60
+    total_seconds = duration_min * 60
+
+    if is_practice:
+        # 练习模式：不创建考试记录，不设倒计时
+        st.session_state.exam_state = "in_progress"
+        st.session_state.questions = questions
+        st.session_state.current_idx = 0
+        st.session_state.answers = {}
+        st.session_state.start_time = None  # 无倒计时
+        st.session_state.total_time = 0
+        st.session_state.attempt_id = None
+        st.session_state.is_practice = True
+    else:
+        attempt_id = db.create_attempt(user['id'], bank["id"], len(questions))
+        st.session_state.exam_state = "in_progress"
+        st.session_state.questions = questions
+        st.session_state.current_idx = 0
+        st.session_state.answers = {}
+        st.session_state.start_time = time.time()
+        st.session_state.total_time = total_seconds
+        st.session_state.attempt_id = attempt_id
+        st.session_state.is_practice = False
     st.rerun()
 
 
@@ -422,13 +465,18 @@ def _resume_exam(attempt):
         elapsed = 0
     start_time = time.time() - elapsed
 
+    # 考试时长从题库配置读取
+    duration_min = bank.get("duration_minutes", 60) or 60
+    total_seconds = duration_min * 60
+
     st.session_state.exam_state = "in_progress"
     st.session_state.questions = questions
     st.session_state.current_idx = 0
     st.session_state.answers = saved_answers
     st.session_state.start_time = start_time
-    st.session_state.total_time = 3600
+    st.session_state.total_time = total_seconds
     st.session_state.attempt_id = attempt["id"]
+    st.session_state.is_practice = False
     st.rerun()
 
 
@@ -437,25 +485,21 @@ def _show_exam_questions():
     total = len(questions)
     idx = st.session_state.current_idx
     current_q = questions[idx]
-    elapsed = get_elapsed_seconds()
-    total_seconds = st.session_state.get("total_time", 3600)  # 默认60分钟
-    remaining = max(0, total_seconds - elapsed)
+    is_practice = st.session_state.get("is_practice", False)
+    is_timed_out = False
+
+    if not is_practice:
+        elapsed = get_elapsed_seconds()
+        total_seconds = st.session_state.get("total_time", 3600)
+        remaining = max(0, total_seconds - elapsed)
+        if remaining <= 0:
+            is_timed_out = True
+
     answered_count = len([a for a in st.session_state.answers.values() if a and a.strip() and a.strip() != '# 在此编写 Python 代码\n'])
 
-    # ⏱️ 倒计时（红色警告 < 5分钟）
-    if remaining <= 300:
-        timer_color = "red"
-        timer_icon = "🔴"
-    elif remaining <= 600:
-        timer_color = "orange"
-        timer_icon = "🟡"
-    else:
-        timer_color = "green"
-        timer_icon = "🟢"
-
-    # 顶部：题号导航 + 时间
+    # 顶部：题号导航
     st.markdown(f"##### 📋 答题卡（点击题号跳转）")
-    nav_cols = st.columns(min(total, 20))  # 每行最多20题
+    nav_cols = st.columns(min(total, 20))
     for i in range(total):
         col_idx = i % 20
         with nav_cols[col_idx]:
@@ -474,8 +518,18 @@ def _show_exam_questions():
                 st.session_state.current_idx = i
                 st.rerun()
 
-    st.markdown(f":{timer_color}[{timer_icon} 剩余 {format_time(remaining)}] ｜ "
-                f"已答 {answered_count}/{total} ｜ 共 {format_time(total_seconds)}")
+    # 时间/模式信息
+    if is_practice:
+        st.markdown(f"📝 练习模式 ｜ 已答 {answered_count}/{total}")
+    else:
+        if remaining <= 300:
+            timer_color, timer_icon = "red", "🔴"
+        elif remaining <= 600:
+            timer_color, timer_icon = "orange", "🟡"
+        else:
+            timer_color, timer_icon = "green", "🟢"
+        st.markdown(f":{timer_color}[{timer_icon} 剩余 {format_time(remaining)}] ｜ "
+                    f"已答 {answered_count}/{total} ｜ 共 {format_time(total_seconds)}")
 
     st.divider()
 
@@ -536,44 +590,84 @@ def _show_exam_questions():
         else:
             code_runner.code_runner_placeholder()
 
+    # 练习模式：选择答案后即时显示对错和解析
+    if is_practice and qtype != "编程" and st.session_state.answers.get(qid):
+        student_ans = st.session_state.answers[qid]
+        correct_ans = current_q.get("answer", "").strip()
+        if qtype == "判断":
+            # 判断对错（简单比较）
+            is_correct = (student_ans == correct_ans)
+        else:
+            is_correct = (student_ans.upper() == correct_ans.upper())
+        if is_correct:
+            st.success(f"✅ 回答正确！")
+        else:
+            st.error(f"❌ 回答错误，正确答案是：{correct_ans}")
+        if current_q.get("explanation"):
+            st.info(f"💡 解析：{clean_text(current_q['explanation'])}")
+
     # 作答提示
     if qtype != "编程" and not st.session_state.answers.get(qid):
         st.caption("⚠️ 请选择一个答案")
 
     st.divider()
 
-    # 导航
-    nc1, nc2, nc3, nc4 = st.columns([1, 1, 1, 1])
-    with nc1:
-        if st.button("⬅️ 上一题", use_container_width=True, disabled=(idx == 0)):
-            st.session_state.current_idx -= 1
-            st.rerun()
-    with nc2:
-        if st.button("下一题 ➡️", use_container_width=True, type="primary", disabled=(idx == total - 1)):
-            st.session_state.current_idx += 1
-            st.rerun()
-    with nc4:
-        unanswered = total - answered_count
-        label = "📩 提交试卷" if unanswered == 0 else f"📩 提交（{unanswered}题未答）"
-        submit_clicked = st.button(label, type="primary", use_container_width=True)
+    # 时间到自动提交（仅考试模式）
+    if is_timed_out and not is_practice:
+        st.error("⏰ 时间到！系统自动提交试卷。")
+        time.sleep(1)
+        _submit_exam(questions, total_seconds)
+        return
 
-        # 提交确认：有未答题时弹出确认
-        if submit_clicked:
-            if unanswered > 0 and not st.session_state.get("confirm_submit", False):
-                st.session_state.confirm_submit = True
-                st.warning(f"⚠️ 还有 {unanswered} 道题未作答！未答题目将计 0 分。")
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("✅ 确认提交，不再检查", type="primary", use_container_width=True):
-                        st.session_state.confirm_submit = False
-                        _submit_exam(questions, elapsed)
-                with c2:
-                    if st.button("↩️ 继续答题", use_container_width=True):
-                        st.session_state.confirm_submit = False
-                        st.rerun()
-            else:
-                st.session_state.confirm_submit = False
-                _submit_exam(questions, elapsed)
+    # 底部导航
+    if is_practice:
+        nc1, nc2, nc3 = st.columns([1, 1, 2])
+        with nc1:
+            if st.button("⬅️ 上一题", use_container_width=True, disabled=(idx == 0)):
+                st.session_state.current_idx -= 1
+                st.rerun()
+        with nc2:
+            if st.button("下一题 ➡️", use_container_width=True, type="primary", disabled=(idx == total - 1)):
+                st.session_state.current_idx += 1
+                st.rerun()
+        with nc3:
+            if st.button("🚪 退出练习", use_container_width=True, type="secondary"):
+                reset_exam_state()
+                st.session_state.last_result = None
+                st.success("练习已结束")
+                time.sleep(0.5)
+                st.rerun()
+    else:
+        nc1, nc2, nc3, nc4 = st.columns([1, 1, 1, 1])
+        with nc1:
+            if st.button("⬅️ 上一题", use_container_width=True, disabled=(idx == 0)):
+                st.session_state.current_idx -= 1
+                st.rerun()
+        with nc2:
+            if st.button("下一题 ➡️", use_container_width=True, type="primary", disabled=(idx == total - 1)):
+                st.session_state.current_idx += 1
+                st.rerun()
+        with nc4:
+            unanswered = total - answered_count
+            label = "📩 提交试卷" if unanswered == 0 else f"📩 提交（{unanswered}题未答）"
+            submit_clicked = st.button(label, type="primary", use_container_width=True)
+
+            if submit_clicked:
+                if unanswered > 0 and not st.session_state.get("confirm_submit", False):
+                    st.session_state.confirm_submit = True
+                    st.warning(f"⚠️ 还有 {unanswered} 道题未作答！未答题目将计 0 分。")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ 确认提交，不再检查", type="primary", use_container_width=True):
+                            st.session_state.confirm_submit = False
+                            _submit_exam(questions, elapsed)
+                    with c2:
+                        if st.button("↩️ 继续答题", use_container_width=True):
+                            st.session_state.confirm_submit = False
+                            st.rerun()
+                else:
+                    st.session_state.confirm_submit = False
+                    _submit_exam(questions, elapsed)
 
 
 def _submit_exam(questions, elapsed):
@@ -1115,6 +1209,10 @@ def page_admin_upload():
             year_months.reverse()
             year = st.selectbox("年月", year_months)
 
+        # 考试时长设置
+        duration_minutes = st.number_input("⏱️ 考试时长（分钟）", min_value=1, max_value=180, value=60, step=5,
+                                           help="学生在考试模式下的倒计时时长，练习模式不受此限制")
+
         # 超级管理员需要选择目标校区
         if is_super:
             campuses = db.get_all_campuses()
@@ -1229,13 +1327,13 @@ def page_admin_upload():
             c_a, c_b = st.columns(2)
             with c_a:
                 if st.button("✅ 确认替换", type="primary"):
-                    db.replace_bank(existing["id"], bank_name, level.strip(), year, uid, cid)
+                    db.replace_bank(existing["id"], bank_name, level.strip(), year, uid, cid, duration_minutes)
                     _do_import(existing["id"], questions, bank_name, user, uploaded_file.name)
             with c_b:
                 if st.button("❌ 取消"):
                     st.rerun()
         else:
-            bank_id = db.create_bank(bank_name, level.strip(), year, uid, cid)
+            bank_id = db.create_bank(bank_name, level.strip(), year, uid, cid, duration_minutes)
             if bank_id:
                 _do_import(bank_id, questions, bank_name, user, uploaded_file.name)
             else:
@@ -1722,12 +1820,20 @@ def main():
 
         if current_page != st.session_state.page:
             if st.session_state.exam_state == "in_progress" and not is_admin:
-                st.warning("⚠️ 离开将丢失当前考试进度！")
-                if st.button("确认离开"):
-                    db.abandon_attempt(st.session_state.attempt_id)
-                    reset_exam_state()
-                    st.session_state.page = current_page
-                    st.rerun()
+                is_practice = st.session_state.get("is_practice", False)
+                if is_practice:
+                    st.info("📝 练习模式，退出不会保存记录。")
+                    if st.button("确认退出练习"):
+                        reset_exam_state()
+                        st.session_state.page = current_page
+                        st.rerun()
+                else:
+                    st.warning("⚠️ 离开将丢失当前考试进度！")
+                    if st.button("确认离开"):
+                        db.abandon_attempt(st.session_state.attempt_id)
+                        reset_exam_state()
+                        st.session_state.page = current_page
+                        st.rerun()
             else:
                 st.session_state.page = current_page
                 st.rerun()
