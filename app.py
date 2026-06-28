@@ -1559,14 +1559,18 @@ def main():
             st.caption("定期备份，防止云端数据丢失")
 
             # 下载备份
-            with open(db.DB_PATH, "rb") as f:
-                st.download_button(
-                    label="📥 下载数据库备份",
-                    data=f,
-                    file_name=f"exam_backup_{time.strftime('%Y%m%d_%H%M%S')}.db",
-                    mime="application/octet-stream",
-                    use_container_width=True,
-                )
+            try:
+                backup_path = db.ensure_local_backup()
+                with open(backup_path, "rb") as f:
+                    st.download_button(
+                        label="📥 下载数据库备份",
+                        data=f,
+                        file_name=f"exam_backup_{time.strftime('%Y%m%d_%H%M%S')}.db",
+                        mime="application/octet-stream",
+                        use_container_width=True,
+                    )
+            except Exception as e:
+                st.warning(f"⚠️ 导出备份失败：{e}")
 
             # 上传恢复
             restore_file = st.file_uploader(
@@ -1577,12 +1581,19 @@ def main():
             )
             if restore_file is not None:
                 if st.button("⚠️ 确认恢复（将覆盖当前数据）", use_container_width=True, type="secondary"):
-                    with open(db.DB_PATH, "wb") as f:
-                        f.write(restore_file.read())
-                    db.init_db()  # 确保表结构完整
-                    st.success("✅ 数据已恢复！请刷新页面。")
-                    time.sleep(1)
-                    st.rerun()
+                    try:
+                        # 将上传的文件临时保存到本地
+                        uploaded_bytes = restore_file.read()
+                        with open(db.DB_PATH, "wb") as f:
+                            f.write(uploaded_bytes)
+                        # 从 SQLite 文件恢复到当前数据库（Turso 或本地）
+                        db.restore_from_sqlite(db.DB_PATH)
+                        db.init_db()  # 确保表结构完整
+                        st.success("✅ 数据已恢复！请刷新页面。")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 恢复失败：{e}")
 
         st.markdown("---")
         if st.button("🚪 退出登录", use_container_width=True):

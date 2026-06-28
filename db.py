@@ -859,5 +859,174 @@ def save_review_answers(review_list):
     conn.close()
 
 
+# ==================== 备份与恢复 ====================
+
+def _is_turso():
+    """检查是否使用 Turso 云数据库"""
+    return bool(TURSO_URL and TURSO_TOKEN)
+
+
+def ensure_local_backup():
+    """确保本地存在 SQLite 备份文件。
+    如果使用 Turso 云数据库，将所有数据导出到本地 SQLite。
+    如果使用本地 SQLite，直接返回已有文件路径。
+    返回本地 SQLite 文件的路径。"""
+    import sqlite3
+
+    # 本地 SQLite 模式：文件已存在，直接返回
+    if os.path.exists(DB_PATH):
+        return DB_PATH
+
+    # Turso 模式：需要从云数据库导出到本地
+    os.makedirs(DB_DIR, exist_ok=True)
+    src = get_conn()  # Turso 连接
+    dst = sqlite3.connect(DB_PATH)
+    dst.execute("PRAGMA foreign_keys = ON")
+
+    # 创建本地表结构
+    dst.executescript("""
+        CREATE TABLE IF NOT EXISTS campuses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS question_banks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            level TEXT NOT NULL,
+            year TEXT NOT NULL,
+            uploader_id INTEGER,
+            campus_id INTEGER,
+            created_at TEXT NOT NULL,
+            delete_requested INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bank_id INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            qtype TEXT NOT NULL,
+            question TEXT NOT NULL,
+            option_a TEXT DEFAULT '',
+            option_b TEXT DEFAULT '',
+            option_c TEXT DEFAULT '',
+            option_d TEXT DEFAULT '',
+            answer TEXT NOT NULL,
+            explanation TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'student',
+            display_name TEXT NOT NULL,
+            campus_id INTEGER,
+            agreed_terms_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS exam_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            bank_id INTEGER NOT NULL,
+            started_at TEXT NOT NULL,
+            submitted_at TEXT,
+            score INTEGER,
+            total INTEGER NOT NULL,
+            time_sec INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            attempt_id INTEGER NOT NULL,
+            question_id INTEGER NOT NULL,
+            given_answer TEXT,
+            is_correct INTEGER DEFAULT 0,
+            phase TEXT DEFAULT 'first',
+            review_answer TEXT,
+            error_reason TEXT
+        );
+        CREATE TABLE IF NOT EXISTS upload_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            campus_id INTEGER,
+            filename TEXT NOT NULL,
+            file_size INTEGER,
+            question_count INTEGER,
+            bank_name TEXT,
+            uploaded_at TEXT NOT NULL
+        );
+    """)
+
+    # 按依赖顺序导出数据
+    tables = ['campuses', 'users', 'question_banks', 'questions',
+              'exam_attempts', 'answers', 'upload_logs']
+    for table in tables:
+        try:
+            rows = src.execute(f"SELECT * FROM {table}").fetchall()
+            if rows:
+                cols = list(rows[0].keys())
+                placeholders = ','.join(['?' for _ in cols])
+                col_names = ','.join(cols)
+                for row in rows:
+                    values = [row[c] for c in cols]
+                    dst.execute(
+                        f"INSERT OR REPLACE INTO {table} ({col_names}) VALUES ({placeholders})",
+                        values
+                    )
+        except Exception:
+            pass  # 表可能为空或不存在
+
+    dst.commit()
+    dst.close()
+    src.close()
+    return DB_PATH
+
+
+def restore_from_sqlite(file_path):
+    """从本地 SQLite 备份文件恢复到当前数据库。
+    适用于 Turso 云数据库和本地 SQLite 两种模式。"""
+    import sqlite3
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"备份文件不存在: {file_path}")
+
+    dst = get_conn()  # 目标数据库（Turso 或本地 SQLite）
+    src = sqlite3.connect(file_path)
+    src.row_factory = sqlite3.Row
+
+    # 按逆依赖顺序清空现有数据
+    tables_to_clear = ['answers', 'exam_attempts', 'upload_logs', 'questions',
+                       'question_banks', 'users', 'campuses']
+    for table in tables_to_clear:
+        try:
+            dst.execute(f"DELETE FROM {table}")
+        except Exception:
+            pass
+
+    # 按依赖顺序导入数据
+    tables_to_import = ['campuses', 'users', 'question_banks', 'questions',
+                        'exam_attempts', 'answers', 'upload_logs']
+    for table in tables_to_import:
+        try:
+            src_rows = src.execute(f"SELECT * FROM {table}").fetchall()
+            if not src_rows:
+                continue
+            # 获取列名
+            pragma_rows = src.execute(f"PRAGMA table_info({table})").fetchall()
+            cols = [r['name'] for r in pragma_rows]
+            placeholders = ','.join(['?' for _ in cols])
+            col_names = ','.join(cols)
+            for row in src_rows:
+                values = [row[c] for c in cols]
+                dst.execute(
+                    f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})",
+                    values
+                )
+        except Exception:
+            pass
+
+    src.close()
+    dst.close()
+
+
 # 启动时自动初始化数据库
 init_db()
