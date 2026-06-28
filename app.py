@@ -323,7 +323,10 @@ def page_login():
 # ==================== 学生：参加考试 ====================
 
 def page_student_exam():
-    st.title("📝 参加考试")
+    if st.session_state.get("is_retry"):
+        st.title("🎯 错题重练")
+    else:
+        st.title("📝 参加考试")
     user = st.session_state.user
 
     if st.session_state.exam_state == "idle":
@@ -509,12 +512,90 @@ def _resume_exam(attempt):
     st.rerun()
 
 
+def _start_retry_exam(user_id, retry_type, retry_count, retry_order, selected_ids=None):
+    """从错题本中抽题，启动重练考试（练习模式，不记入历史）。"""
+    import random
+
+    # 获取全部错题（不分页）
+    all_wrong = db.get_wrong_questions(user_id)
+
+    # 按类型筛选
+    if retry_type == "仅单选":
+        all_wrong = [q for q in all_wrong if q.get("qtype") == "单选"]
+    elif retry_type == "仅判断":
+        all_wrong = [q for q in all_wrong if q.get("qtype") == "判断"]
+    else:
+        all_wrong = [q for q in all_wrong if q.get("qtype") != "编程"]
+
+    # 按选中 ID 筛选（多选模式）
+    if selected_ids:
+        sid_set = set(selected_ids)
+        all_wrong = [q for q in all_wrong if q["id"] in sid_set]
+
+    if not all_wrong:
+        st.warning("没有符合条件的错题可供重练。")
+        st.stop()
+        return
+
+    # 限制数量
+    if retry_count != "全部":
+        count = int(retry_count)
+        if len(all_wrong) > count:
+            all_wrong = random.sample(all_wrong, count)
+
+    # 打乱顺序
+    if retry_order == "随机":
+        random.shuffle(all_wrong)
+
+    # 设置练习模式的 session state
+    st.session_state.exam_state = "in_progress"
+    st.session_state.questions = all_wrong
+    st.session_state.current_idx = 0
+    st.session_state.answers = {}
+    st.session_state.start_time = None
+    st.session_state.total_time = 0
+    st.session_state.attempt_id = None
+    st.session_state.is_practice = True
+    st.session_state.is_retry = True
+
+    st.session_state.page = "📝 参加考试"
+    st.rerun()
+
+
+def _finish_retry_exam():
+    """结束错题重练，判分并显示简要结果后返回错题本。"""
+    questions = st.session_state.questions
+    answers = st.session_state.answers
+
+    # 使用 grader 判分
+    result = grader.grade_all(questions, answers)
+    score = result["score"]
+    total = result["total"]
+    pct = round(score / total * 100, 1) if total > 0 else 0
+
+    # 保存结果到 session_state 以便展示
+    st.session_state.retry_result = {"score": score, "total": total, "percentage": pct}
+
+    # 清理重练状态
+    st.session_state.exam_state = "idle"
+    st.session_state.questions = []
+    st.session_state.current_idx = 0
+    st.session_state.answers = {}
+    st.session_state.is_practice = False
+    st.session_state.is_retry = False
+    st.session_state.last_result = None
+
+    st.session_state.page = "❌ 错题本"
+    st.rerun()
+
+
 def _show_exam_questions():
     questions = st.session_state.questions
     total = len(questions)
     idx = st.session_state.current_idx
     current_q = questions[idx]
     is_practice = st.session_state.get("is_practice", False)
+    is_retry = st.session_state.get("is_retry", False)
     is_timed_out = False
 
     if not is_practice:
@@ -660,12 +741,17 @@ def _show_exam_questions():
                 st.session_state.current_idx += 1
                 st.rerun()
         with nc3:
-            if st.button("🚪 退出练习", use_container_width=True, type="secondary"):
-                reset_exam_state()
-                st.session_state.last_result = None
-                st.success("练习已结束")
-                time.sleep(0.5)
-                st.rerun()
+            btn_label = "🚪 退出重练" if is_retry else "🚪 退出练习"
+            if st.button(btn_label, use_container_width=True, type="secondary"):
+                # 重练模式：计算得分后回到错题本
+                if is_retry:
+                    _finish_retry_exam()
+                else:
+                    reset_exam_state()
+                    st.session_state.last_result = None
+                    st.success("练习已结束")
+                    time.sleep(0.5)
+                    st.rerun()
     else:
         nc1, nc2, nc3, nc4 = st.columns([1, 1, 1, 1])
         with nc1:
@@ -1303,27 +1389,85 @@ def page_student_wrong():
         st.success("🎉 太棒了！你没有错题记录。")
         return
 
+    # ---- 错题重练面板 ----
+    with st.expander("🎯 错题重练", expanded=False):
+        st.caption("把错题重新组成试卷练习，加深记忆。仅限单选和判断题，不含编程题。")
+        rc1, rc2, rc3 = st.columns(3)
+        with rc1:
+            retry_type = st.selectbox("题目类型", ["全部", "仅单选", "仅判断"], key="retry_type")
+        with rc2:
+            retry_count = st.selectbox(
+                "题目数量", ["全部"] + [str(i) for i in range(5, 55, 5)],
+                index=0, key="retry_count"
+            )
+        with rc3:
+            retry_order = st.selectbox("出题顺序", ["随机", "顺序"], key="retry_order")
+
+        if st.button("🚀 开始错题重练", type="primary", use_container_width=True):
+            _start_retry_exam(user['id'], retry_type, retry_count, retry_order)
+            return
+
+    # ---- 显示重练结果（如果有） ----
+    retry_result = st.session_state.pop("retry_result", None)
+    if retry_result:
+        score, total_q, pct = retry_result["score"], retry_result["total"], retry_result["percentage"]
+        emoji = "🏆" if pct >= 90 else ("👍" if pct >= 75 else ("💪" if pct >= 60 else "📚"))
+        st.success(f"{emoji} 错题重练完成！得分：{score}/{total_q}（{pct}%）")
+        st.balloons()
+
     st.markdown(f"共 {total} 道错题（去重后），按最近考试时间排列：")
     st.caption("💡 已订正正确的题目显示全部解析；未订正的题目需先完成订正才能查看正确答案")
+
+    # ---- 多选管理 ----
+    sel_key = "wrong_selected"
+    if sel_key not in st.session_state:
+        st.session_state[sel_key] = set()
+
     st.divider()
 
     page_key = "wrong_page"
     page = st.session_state.get(page_key, 0)
     wrong_qs = db.get_wrong_questions(user['id'], limit=PAGE_SIZE, offset=page * PAGE_SIZE)
 
+    # 全选/取消本页 — 放在数据加载之后
+    sc1, sc2, sc3 = st.columns([1, 1, 5])
+    with sc1:
+        if st.button("☑️ 全选本页", key="wrong_sel_all", use_container_width=True):
+            for q in wrong_qs:
+                if q.get("qtype") != "编程":
+                    st.session_state[sel_key].add(q["id"])
+            st.rerun()
+    with sc2:
+        if st.button("取消全选", key="wrong_sel_none", use_container_width=True):
+            st.session_state[sel_key] = set()
+            st.rerun()
+    with sc3:
+        sel_count = len(st.session_state[sel_key])
+        if sel_count > 0:
+            st.caption(f"📌 已选 {sel_count} 题")
+
     for i, q in enumerate(wrong_qs):
         was_corrected = q.get("was_corrected", 0) == 1
         qtype = q.get("qtype", "")
+        qid = q["id"]
 
         # 图标 + 状态标签
         icon = "🔵" if qtype == "单选" else ("🟢" if qtype == "判断" else "💻")
         status_badge = " ✅已订正" if was_corrected else " ⏳待订正"
 
         with st.expander(f"{icon} {qtype}{status_badge} — {q['question'][:50]}{'...' if len(q.get('question','') or '') > 50 else ''}"):
+            # 多选 checkbox（编程题不可选）
+            if qtype != "编程":
+                checked = qid in st.session_state[sel_key]
+                sel = st.checkbox("选择此题加入重练", value=checked, key=f"wrong_sel_{qid}")
+                if sel and not checked:
+                    st.session_state[sel_key].add(qid)
+                elif not sel and checked:
+                    st.session_state[sel_key].discard(qid)
+
             st.markdown(f"题目：{clean_text(q.get('question', ''))}")
 
             if qtype == "单选":
-                # 显示选项
                 for label, key in [("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]:
                     if q.get(key):
                         marks = []
@@ -1332,7 +1476,6 @@ def page_student_wrong():
                         review_ans = q.get("review_answer", "")
 
                         if was_corrected:
-                            # 已订正正确 → 完整显示
                             if label == correct_ans:
                                 marks.append("✅ 正确答案")
                             if label == given_ans:
@@ -1340,7 +1483,6 @@ def page_student_wrong():
                             if review_ans and label == review_ans and review_ans != given_ans:
                                 marks.append("📝 订正作答")
                         else:
-                            # 未订正 → 只显示学生作答，隐藏正确答案
                             if label == given_ans:
                                 marks.append("❌ 你的作答")
 
@@ -1356,13 +1498,11 @@ def page_student_wrong():
                 else:
                     st.markdown(f"　你的作答：{q.get('given_answer', '未作答')} ❌")
             else:
-                # 编程题
                 code = q.get("given_answer") or ""
                 if code and code.strip() and code.strip() != "# 在此编写 Python 代码":
                     st.code(code, language="python")
                 else:
                     st.caption("（未作答）")
-                # 批改状态
                 if q.get("phase") == "review":
                     if q.get("is_correct") == 1:
                         st.success("✅ 已通过（管理员已批改）")
@@ -1374,25 +1514,39 @@ def page_student_wrong():
                 else:
                     st.info("📝 待管理员批改")
 
-            # 错误原因
             error_reason = q.get("error_reason", "")
             if error_reason:
                 st.caption(f"📌 错误原因：{error_reason}")
 
-            # 解析：仅已订正正确的题目显示
             if was_corrected and q.get("explanation"):
                 st.info(f"💡 解析：{clean_text(q['explanation'])}")
                 st.success("🎉 已通过订正掌握本题！")
             elif not was_corrected and qtype != "编程":
                 st.warning("🔒 完成错题订正后可解锁正确答案和解析")
-                # 去订正按钮
                 attempt_id = q.get("attempt_id")
                 if attempt_id:
-                    if st.button("📝 去订正本题", key=f"goto_fix_{q['id']}_{attempt_id}", use_container_width=True):
+                    if st.button("📝 去订正本题", key=f"goto_fix_{qid}_{attempt_id}", use_container_width=True):
                         st.session_state.attempt_id = attempt_id
                         st.session_state.exam_state = "reviewing"
                         st.session_state.page = "📊 考试结果"
                         st.rerun()
+
+    # ---- 底部：重练已选题 ----
+    sel_count = len(st.session_state[sel_key])
+    if sel_count > 0:
+        st.divider()
+        bc1, bc2, bc3 = st.columns([2, 1, 1])
+        with bc1:
+            st.markdown(f"已选 **{sel_count}** 道题待重练")
+        with bc2:
+            if st.button(f"🎯 重练已选 {sel_count} 题", type="primary", use_container_width=True):
+                selected_ids = list(st.session_state[sel_key])
+                _start_retry_exam(user['id'], "全部", "全部", "随机", selected_ids=selected_ids)
+                return
+        with bc3:
+            if st.button("🗑️ 清除选择", use_container_width=True):
+                st.session_state[sel_key] = set()
+                st.rerun()
 
     pagination_bar(page_key, total)
 
