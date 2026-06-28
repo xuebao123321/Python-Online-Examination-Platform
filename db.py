@@ -177,6 +177,18 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS operation_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            action TEXT NOT NULL,
+            target TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -229,6 +241,40 @@ def get_upload_logs_count(campus_id=None):
         ).fetchone()
     else:
         row = conn.execute("SELECT COUNT(*) as cnt FROM upload_logs").fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
+
+
+# ==================== 操作日志 ====================
+
+def create_operation_log(user_id, username, action, target="", detail=""):
+    """记录管理操作日志"""
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO operation_logs (user_id, username, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, username, action, target, detail, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_operation_logs(limit=None, offset=0):
+    """获取操作日志（仅超管可见），支持分页"""
+    conn = get_conn()
+    sql = "SELECT * FROM operation_logs ORDER BY created_at DESC"
+    params = []
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = [limit, offset]
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_operation_logs_count():
+    """获取操作日志总数"""
+    conn = get_conn()
+    row = conn.execute("SELECT COUNT(*) as cnt FROM operation_logs").fetchone()
     conn.close()
     return int(row["cnt"]) if row else 0
 
@@ -1067,6 +1113,15 @@ def ensure_local_backup(campus_id=None):
             bank_name TEXT,
             uploaded_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS operation_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            action TEXT NOT NULL,
+            target TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        );
     """)
 
     # 按依赖顺序导出数据（校区管理员只导出本校数据）
@@ -1084,6 +1139,7 @@ def ensure_local_backup(campus_id=None):
          f"SELECT a.* FROM answers a JOIN exam_attempts ea ON a.attempt_id = ea.id JOIN users u ON ea.user_id = u.id"
          f"{' WHERE u.campus_id = ' + str(campus_id) if campus_id else ''}"),
         ('upload_logs', f"SELECT * FROM upload_logs{' WHERE campus_id = ' + str(campus_id) if campus_id else ''}"),
+        ('operation_logs', "SELECT * FROM operation_logs"),
     ]
     for table, query in tables:
         try:

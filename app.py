@@ -128,6 +128,7 @@ def init_session():
         "review_reasons": {},
         "wrong_qids": [],
         "is_practice": False,
+        "last_activity": time.time(),
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -161,6 +162,17 @@ def get_elapsed_seconds():
     if st.session_state.start_time is None:
         return 0
     return int(time.time() - st.session_state.start_time)
+
+
+def log_operation(action, target="", detail=""):
+    """记录管理操作日志"""
+    user = st.session_state.get("user", {})
+    uid = user.get("id") if user else None
+    uname = user.get("username", "?") if user else "?"
+    try:
+        db.create_operation_log(uid, uname, action, target, detail)
+    except Exception:
+        pass  # 日志记录失败不影响主流程
 
 
 def reset_exam_state():
@@ -1279,6 +1291,7 @@ def page_admin_upload():
                     # 删除 / 申请删除
                     if is_super:
                         if st.button("🗑️ 删除", key=f"del_{b['id']}", use_container_width=True):
+                            log_operation("删除题库", b['name'], f"level={b['level']} year={b['year']}")
                             db.delete_bank(b["id"])
                             st.rerun()
                     else:
@@ -1642,6 +1655,7 @@ def page_admin_users():
             if reset_user and reset_pwd:
                 ok, msg = auth.reset_password(reset_user, reset_pwd, recovery_key, recovery_key)
                 if ok:
+                    log_operation("重置密码", reset_user)
                     st.success(msg)
                 else:
                     st.error(msg)
@@ -1652,32 +1666,54 @@ def page_admin_users():
 # ==================== 超级管理员：校区管理 ====================
 
 def page_admin_audit_log():
-    """上传审计日志（仅超级管理员可见）"""
-    st.title("📋 上传日志")
-    st.caption("记录所有题库上传操作，用于版权溯源")
+    """上传审计日志 + 操作日志（仅超级管理员可见）"""
+    st.title("📋 审计日志")
 
-    total = db.get_upload_logs_count()
-    if total == 0:
-        st.info("暂无上传记录")
-        return
+    tab1, tab2 = st.tabs(["📤 上传日志", "🔧 操作日志"])
 
-    page_key = "audit_page"
-    page = st.session_state.get(page_key, 0)
-    logs = db.get_upload_logs(limit=PAGE_SIZE, offset=page * PAGE_SIZE)
+    with tab1:
+        st.caption("记录所有题库上传操作，用于版权溯源")
+        total = db.get_upload_logs_count()
+        if total == 0:
+            st.info("暂无上传记录")
+        else:
+            page_key = "audit_page"
+            page = st.session_state.get(page_key, 0)
+            logs = db.get_upload_logs(limit=PAGE_SIZE, offset=page * PAGE_SIZE)
+            data = []
+            for l in logs:
+                data.append({
+                    "时间": l['uploaded_at'],
+                    "上传者": l.get('uploader_name', '?'),
+                    "账号": l.get('username', '?'),
+                    "校区": l.get('campus_name', '全部'),
+                    "文件名": l['filename'],
+                    "题库名": l.get('bank_name', ''),
+                    "题目数": l['question_count'],
+                })
+            st.dataframe(data, use_container_width=True, hide_index=True)
+            pagination_bar(page_key, total)
 
-    data = []
-    for l in logs:
-        data.append({
-            "时间": l['uploaded_at'],
-            "上传者": l.get('uploader_name', '?'),
-            "账号": l.get('username', '?'),
-            "校区": l.get('campus_name', '全部'),
-            "文件名": l['filename'],
-            "题库名": l.get('bank_name', ''),
-            "题目数": l['question_count'],
-        })
-    st.dataframe(data, use_container_width=True, hide_index=True)
-    pagination_bar(page_key, total)
+    with tab2:
+        st.caption("记录管理操作：删除题库、删除校区、重置密码、恢复备份等")
+        op_total = db.get_operation_logs_count()
+        if op_total == 0:
+            st.info("暂无操作记录")
+        else:
+            op_page_key = "oplog_page"
+            op_page = st.session_state.get(op_page_key, 0)
+            logs = db.get_operation_logs(limit=PAGE_SIZE, offset=op_page * PAGE_SIZE)
+            op_data = []
+            for l in logs:
+                op_data.append({
+                    "时间": l['created_at'],
+                    "操作人": l.get('username', '?'),
+                    "操作": l['action'],
+                    "目标": l.get('target', ''),
+                    "详情": l.get('detail', ''),
+                })
+            st.dataframe(op_data, use_container_width=True, hide_index=True)
+            pagination_bar(op_page_key, op_total)
 
 
 def page_admin_campuses():
@@ -1730,6 +1766,7 @@ def page_admin_campuses():
                         cc_a, cc_b = st.columns(2)
                         with cc_a:
                             if st.button("✅ 确认删除", key=f"do_{c['id']}", use_container_width=True, type="primary"):
+                                log_operation("删除校区", c['name'])
                                 db.delete_campus(c['id'])
                                 st.session_state[confirm_key] = False
                                 st.rerun()
@@ -1747,6 +1784,17 @@ def page_admin_campuses():
 # ==================== 主程序 ====================
 
 def main():
+    # ---- 会话超时检测（2小时无操作自动退出）----
+    SESSION_TIMEOUT = 2 * 60 * 60  # 2小时
+    if st.session_state.get("logged_in"):
+        last_active = st.session_state.get("last_activity", 0)
+        now = time.time()
+        if now - last_active > SESSION_TIMEOUT:
+            logout()
+            st.warning("⏰ 会话已超时，请重新登录。")
+            st.stop()
+        st.session_state["last_activity"] = now
+
     # ---- 确保默认超级管理员存在 ----
     # 仅在 secrets 中显式配置了管理员账号密码时才自动创建，不再使用硬编码默认值
     try:
@@ -1844,19 +1892,35 @@ def main():
             st.markdown("💾 数据管理")
             st.caption("定期备份，防止云端数据丢失")
 
-            # 下载备份
-            try:
-                backup_path = db.ensure_local_backup(campus_id=campus_id)
-                with open(backup_path, "rb") as f:
-                    st.download_button(
-                        label="📥 下载数据库备份",
-                        data=f,
-                        file_name=f"exam_backup_{time.strftime('%Y%m%d_%H%M%S')}.db",
-                        mime="application/octet-stream",
-                        use_container_width=True,
-                    )
-            except Exception as e:
-                st.warning(f"⚠️ 导出备份失败：{e}")
+            # 下载备份（懒加载：点击按钮后才生成）
+            backup_key = "backup_ready"
+            if not st.session_state.get(backup_key):
+                if st.button("📦 生成备份文件", use_container_width=True):
+                    with st.spinner("正在导出数据..."):
+                        try:
+                            backup_path = db.ensure_local_backup(campus_id=campus_id)
+                            st.session_state[backup_key] = True
+                            st.session_state["backup_path"] = backup_path
+                            st.rerun()
+                        except Exception as e:
+                            st.warning(f"⚠️ 导出备份失败：{e}")
+            else:
+                try:
+                    backup_path = st.session_state.get("backup_path", db.DB_PATH)
+                    with open(backup_path, "rb") as f:
+                        st.download_button(
+                            label="📥 下载数据库备份",
+                            data=f,
+                            file_name=f"exam_backup_{time.strftime('%Y%m%d_%H%M%S')}.db",
+                            mime="application/octet-stream",
+                            use_container_width=True,
+                        )
+                    if st.button("🔄 重新生成", use_container_width=True):
+                        st.session_state[backup_key] = False
+                        st.rerun()
+                except Exception as e:
+                    st.warning(f"⚠️ 下载失败：{e}")
+                    st.session_state[backup_key] = False
 
             # 上传恢复
             restore_file = st.file_uploader(
@@ -1875,6 +1939,7 @@ def main():
                         # 从 SQLite 文件恢复到当前数据库（Turso 或本地）
                         db.restore_from_sqlite(db.DB_PATH)
                         db.init_db()  # 确保表结构完整
+                        log_operation("恢复数据库备份")
                         st.success("✅ 数据已恢复！请刷新页面。")
                         time.sleep(1)
                         st.rerun()
