@@ -1217,9 +1217,12 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
             with mc1:
                 st.metric("📝 首次得分", f"{original_score}/{orig_total}", f"{orig_pct}%")
             with mc2:
-                delta_str = f"+{improvement}题 (+{round(improvement/orig_total*100,1)}%)" if improvement > 0 else None
-                st.metric("🎯 订正后得分", f"{current_score_val}/{orig_total}", f"{curr_pct}%",
-                         delta=delta_str)
+                if improvement > 0:
+                    delta_str = f"+{improvement}题 (+{round(improvement/orig_total*100,1)}%)"
+                    st.metric("🎯 订正后得分", f"{current_score_val}/{orig_total}", f"{curr_pct}%",
+                             delta=delta_str)
+                else:
+                    st.metric("🎯 订正后得分", f"{current_score_val}/{orig_total}", f"{curr_pct}%")
             with mc3:
                 st.metric("⏱️ 用时", format_time(time_sec))
 
