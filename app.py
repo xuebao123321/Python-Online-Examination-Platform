@@ -1751,6 +1751,16 @@ def page_admin_upload():
                         for q in qs:
                             qtype_icon = {'单选': '🔵', '判断': '🟢', '编程': '💻'}.get(q['qtype'], '')
                             _show_question_editor(b["id"], q, qtype_icon)
+                            # 显示错误率统计
+                            estats = db.get_question_error_stats(q["id"])
+                            if estats and estats["total_attempts"] > 0:
+                                rate_text = f"📊 被作答 {estats['total_attempts']} 次 ｜ 错误率 {estats['error_rate']}%"
+                                if estats["common_wrong_answers"] and q.get("qtype") == "单选":
+                                    wrong_list = " / ".join(
+                                        f"{w['answer']} ({w['count']}次)" for w in estats["common_wrong_answers"][:3]
+                                    )
+                                    rate_text += f" ｜ 常见错选：{wrong_list}"
+                                st.caption(rate_text)
 
                 st.divider()
         else:
@@ -1956,13 +1966,18 @@ def page_admin_dashboard():
     st.subheader("🔍 错因分布统计")
     error_stats = db.get_error_reason_stats(campus_id)
     if error_stats:
-        error_data = [{"错误原因": e['error_reason'], "次数": e['cnt']} for e in error_stats]
-        st.dataframe(error_data, use_container_width=True, hide_index=True)
-        # 简易柱状图
         total_errors = sum(e['cnt'] for e in error_stats)
+        st.metric("累计错因记录", f"{total_errors} 条")
+        error_data = [{"错误原因": e['error_reason'], "次数": e['cnt'],
+                       "占比": f"{round(e['cnt']/total_errors*100,1)}%" if total_errors > 0 else "0%"}
+                      for e in error_stats]
+        st.dataframe(error_data, use_container_width=True, hide_index=True)
+        # 可视化柱状图
         for e in error_stats:
             pct = round(e['cnt'] / total_errors * 100, 1) if total_errors > 0 else 0
-            st.markdown(f"{e['error_reason']}：{e['cnt']} 次 ({pct}%)")
+            emoji = {"粗心马虎": "😅", "知识点未掌握": "📚", "没有思路": "🤔",
+                     "审题不清": "🔍", "其他": "📌"}.get(e['error_reason'], "📌")
+            st.markdown(f"{emoji} {e['error_reason']}：**{e['cnt']}** 次（{pct}%）")
             st.progress(e['cnt'] / total_errors if total_errors > 0 else 0)
     else:
         st.info("暂无错因数据（学生尚未完成错题订正）")
@@ -2101,6 +2116,81 @@ def page_admin_student_detail():
         st.rerun()
 
 
+def _generate_records_csv(campus_id=None):
+    """生成全部考试记录的 CSV 字符串（UTF-8 BOM）。"""
+    import csv
+    import io
+
+    # 批量获取带订正统计的记录
+    conn = db.get_conn()
+    if campus_id:
+        sql = """SELECT ea.*, qb.name as bank_name, u.display_name as user_name, u.username,
+                        COUNT(CASE WHEN q.qtype != '编程' AND (a.phase = 'review' OR (a.phase = 'first' AND a.is_correct = 0)) THEN 1 END) as wrong_count,
+                        COUNT(CASE WHEN a.phase = 'review' AND a.is_correct = 1 AND q.qtype != '编程' THEN 1 END) as corrected_count,
+                        SUM(CASE WHEN a.is_correct = 0 AND q.qtype != '编程' THEN 1 ELSE 0 END) as uncorrected_count
+                 FROM exam_attempts ea
+                 JOIN question_banks qb ON ea.bank_id = qb.id
+                 JOIN users u ON ea.user_id = u.id
+                 LEFT JOIN answers a ON a.attempt_id = ea.id
+                 LEFT JOIN questions q ON a.question_id = q.id
+                 WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?
+                 GROUP BY ea.id
+                 ORDER BY ea.submitted_at DESC"""
+        rows = conn.execute(sql, (campus_id,)).fetchall()
+    else:
+        sql = """SELECT ea.*, qb.name as bank_name, u.display_name as user_name, u.username,
+                        COUNT(CASE WHEN q.qtype != '编程' AND (a.phase = 'review' OR (a.phase = 'first' AND a.is_correct = 0)) THEN 1 END) as wrong_count,
+                        COUNT(CASE WHEN a.phase = 'review' AND a.is_correct = 1 AND q.qtype != '编程' THEN 1 END) as corrected_count,
+                        SUM(CASE WHEN a.is_correct = 0 AND q.qtype != '编程' THEN 1 ELSE 0 END) as uncorrected_count
+                 FROM exam_attempts ea
+                 JOIN question_banks qb ON ea.bank_id = qb.id
+                 JOIN users u ON ea.user_id = u.id
+                 LEFT JOIN answers a ON a.attempt_id = ea.id
+                 LEFT JOIN questions q ON a.question_id = q.id
+                 WHERE ea.submitted_at IS NOT NULL
+                 GROUP BY ea.id
+                 ORDER BY ea.submitted_at DESC"""
+        rows = conn.execute(sql).fetchall()
+    conn.close()
+
+    if not rows:
+        return None
+
+    output = io.StringIO()
+    output.write('﻿')  # UTF-8 BOM
+    writer = csv.writer(output)
+    writer.writerow([
+        "学生姓名", "用户名", "题库名称", "得分", "总分", "正确率(%)",
+        "用时", "提交时间", "错题数", "已订正数", "未订正数", "订正状态"
+    ])
+
+    for r in rows:
+        r = dict(r)
+        pct = round(r["score"] / r["total"] * 100, 1) if r["total"] > 0 else 0
+        w = int(r.get("wrong_count") or 0)
+        c = int(r.get("corrected_count") or 0)
+        u = int(r.get("uncorrected_count") or 0)
+
+        if w == 0:
+            status = "全部正确"
+        elif u == 0 and c > 0:
+            status = "全部订正"
+        elif c > 0:
+            status = "部分订正"
+        else:
+            status = "未订正"
+
+        time_str = format_time(r.get("time_sec", 0))
+        writer.writerow([
+            r.get("user_name", ""), r.get("username", ""), r.get("bank_name", ""),
+            r["score"], r["total"], pct,
+            time_str, r.get("submitted_at", ""),
+            w, c, u, status
+        ])
+
+    return output.getvalue()
+
+
 def page_admin_records():
     """管理员查看所有考试记录"""
     st.title("📜 全部考试记录")
@@ -2111,11 +2201,22 @@ def page_admin_records():
         st.info("还没有考试记录。")
         return
 
-    mc1, mc2 = st.columns(2)
+    mc1, mc2, mc3 = st.columns(3)
     with mc1:
         st.metric("总考试次数", total)
     with mc2:
         st.metric("每页显示", f"{PAGE_SIZE} 条")
+    with mc3:
+        # CSV 导出
+        csv_data = _generate_records_csv(campus_id)
+        if csv_data:
+            st.download_button(
+                "📥 导出 CSV",
+                csv_data,
+                f"考试记录_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+                "text/csv",
+                use_container_width=True,
+            )
     st.divider()
 
     page_key = "records_page"

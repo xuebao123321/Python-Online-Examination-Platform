@@ -686,6 +686,43 @@ def get_question_count(bank_id):
     return row["cnt"]
 
 
+def get_question_error_stats(question_id):
+    """获取某道题的错误统计。
+    返回 {total_attempts, wrong_count, error_rate, common_wrong_answers: [{answer, count}]}"""
+    conn = get_conn()
+    row = conn.execute("""
+        SELECT COUNT(*) as total_attempts,
+               SUM(CASE WHEN a.is_correct = 0 THEN 1 ELSE 0 END) as wrong_count
+        FROM answers a
+        WHERE a.question_id = ? AND a.phase = 'first'
+    """, (question_id,)).fetchone()
+
+    total = int(row["total_attempts"] or 0)
+    wrong = int(row["wrong_count"] or 0)
+
+    # 常见错误答案分布（仅对单选题有意义）
+    common = []
+    if total > 0:
+        common_rows = conn.execute("""
+            SELECT a.given_answer, COUNT(*) as cnt
+            FROM answers a
+            WHERE a.question_id = ? AND a.is_correct = 0 AND a.phase = 'first'
+              AND a.given_answer IS NOT NULL AND a.given_answer != ''
+            GROUP BY a.given_answer
+            ORDER BY cnt DESC
+            LIMIT 5
+        """, (question_id,)).fetchall()
+        common = [{"answer": r["given_answer"], "count": int(r["cnt"])} for r in common_rows]
+
+    conn.close()
+    return {
+        "total_attempts": total,
+        "wrong_count": wrong,
+        "error_rate": round(wrong / total * 100, 1) if total > 0 else 0,
+        "common_wrong_answers": common,
+    }
+
+
 # ==================== 考试记录操作 ====================
 
 def create_attempt(user_id, bank_id, total):
