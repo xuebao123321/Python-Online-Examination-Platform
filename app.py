@@ -372,6 +372,8 @@ def _start_exam(bank, user):
 
 
 def _resume_exam(attempt):
+    from datetime import datetime
+
     bank = db.get_bank_by_id(attempt["bank_id"])
     if not bank:
         st.error("题库已删除。")
@@ -384,11 +386,24 @@ def _resume_exam(attempt):
         db.abandon_attempt(attempt["id"])
         st.rerun()
         return
+
+    # 恢复已有的答案
+    saved_answers = db.get_answers_by_attempt(attempt["id"])
+
+    # 恢复正确的倒计时：根据 started_at 计算已用时间
+    started_str = attempt.get("started_at", "")
+    try:
+        started_dt = datetime.strptime(started_str, "%Y-%m-%d %H:%M:%S")
+        elapsed = (datetime.now() - started_dt).total_seconds()
+    except (ValueError, TypeError):
+        elapsed = 0
+    start_time = time.time() - elapsed
+
     st.session_state.exam_state = "in_progress"
     st.session_state.questions = questions
     st.session_state.current_idx = 0
-    st.session_state.answers = {}
-    st.session_state.start_time = time.time()
+    st.session_state.answers = saved_answers
+    st.session_state.start_time = start_time
     st.session_state.total_time = 3600
     st.session_state.attempt_id = attempt["id"]
     st.rerun()
@@ -542,14 +557,15 @@ def _submit_exam(questions, elapsed):
     result = grader.grade_all(questions, st.session_state.answers)
     db.submit_attempt(st.session_state.attempt_id, result["score"], elapsed)
     answers_batch = [
-        (st.session_state.attempt_id, r["question"]["id"], r["given_answer"], 1 if r["is_correct"] else 0)
+        (st.session_state.attempt_id, r["question"]["id"], r["given_answer"],
+         1 if r["is_correct"] is True else 0)
         for r in result["results"]
     ]
     db.save_answers_batch(answers_batch)
     st.session_state.last_result = result
     st.session_state.last_time_sec = elapsed
     st.session_state.exam_state = "submitted"  # 首次提交，不展示解析
-    st.session_state.wrong_qids = [r["question"]["id"] for r in result["results"] if not r["is_correct"]]
+    st.session_state.wrong_qids = [r["question"]["id"] for r in result["results"] if r["is_correct"] is False]
     st.session_state.review_answers = {}
     st.session_state.review_reasons = {}
     st.rerun()
@@ -571,7 +587,8 @@ def page_student_results():
         detail = db.get_attempt_detail(st.session_state.review_attempt_id)
         if detail:
             result = {"score": detail["score"], "total": detail["total"], "results": [
-                {"question": a, "given_answer": a["given_answer"], "is_correct": bool(a["is_correct"])}
+                {"question": a, "given_answer": a["given_answer"],
+                 "is_correct": None if a.get("qtype") == "编程" else bool(a["is_correct"])}
                 for a in detail["answers"]
             ]}
             time_sec = detail.get("time_sec", 0)
@@ -633,9 +650,13 @@ def page_student_results():
 
     wrong_count = 0
     for i, r in enumerate(result["results"]):
-        icon = "✅" if r["is_correct"] else "❌"
+        # 编程题显示 📝，答对 ✅，答错 ❌
+        if r["is_correct"] is None:
+            icon = "📝"
+        else:
+            icon = "✅" if r["is_correct"] else "❌"
         q = r["question"]
-        if not r["is_correct"]:
+        if r["is_correct"] is False:
             wrong_count += 1
         with st.expander(f"{icon} 第 {i+1} 题 — {q['question'][:60]}{'...' if len(q['question'])>60 else ''}"):
             qtype_label = {'单选': '🔵 单选题', '判断': '🟢 判断题', '编程': '💻 编程题'}.get(q['qtype'], q['qtype'])
@@ -681,7 +702,7 @@ def _show_review_mode():
     st.caption("请重新作答错题，并选择错误原因。完成后将解锁全部解析。")
 
     result = st.session_state.last_result
-    wrong_results = [r for r in result["results"] if not r["is_correct"]]
+    wrong_results = [r for r in result["results"] if r["is_correct"] is False]
     total_wrong = len(wrong_results)
     idx = st.session_state.get("review_idx", 0)
 
@@ -811,7 +832,10 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
     st.subheader("📋 逐题回顾")
     for i, r in enumerate(result["results"]):
         q = r["question"]
-        icon = "✅" if r["is_correct"] else "❌"
+        if r["is_correct"] is None:
+            icon = "📝"
+        else:
+            icon = "✅" if r["is_correct"] else "❌"
         # 如果有订正答案则显示订正后的，否则显示首次答案
         review_ans = q.get("review_answer", "")
         given = review_ans if review_ans else (r["given_answer"] or "（未作答）")
@@ -834,8 +858,12 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
 
             if phase == "review" and review_ans:
                 st.markdown(f"首次学生作答：{first_ans or '未作答'}")
-                st.markdown(f"订正学生作答：{review_ans} {'✅' if first_correct else '❌'}")
-            elif q["qtype"] != "编程":
+                status_icon = "📝" if first_correct is None else ("✅" if first_correct else "❌")
+                st.markdown(f"订正学生作答：{review_ans} {status_icon}")
+            elif q["qtype"] == "编程":
+                # 编程题只显示代码，不显示 ✅/❌
+                pass
+            else:
                 st.markdown(f"学生作答：{first_ans or given or '未作答'} {'✅' if first_correct else '❌'}")
 
             if q["qtype"] == "编程":
@@ -867,12 +895,14 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
             # 管理员始终可见解析
             if is_admin and q.get("explanation"):
                 st.markdown(f"💡 解析：{clean_text(q['explanation'])}")
-            # 学生：答对显示解析，答错引导订正
+            # 学生：答对显示解析，答错引导订正，编程题待批改
             elif not is_admin:
                 if r["is_correct"] and q.get("explanation"):
                     st.markdown(f"💡 解析：{clean_text(q['explanation'])}")
-                elif not r["is_correct"]:
+                elif r["is_correct"] is False:
                     st.warning("📝 请先完成错题订正，订正后即可查看正确答案和解析")
+                elif r["is_correct"] is None:
+                    st.info("📝 编程题待人工批改")
 
 
 # ==================== 学生：历史记录 ====================
@@ -1560,7 +1590,7 @@ def main():
 
             # 下载备份
             try:
-                backup_path = db.ensure_local_backup()
+                backup_path = db.ensure_local_backup(campus_id=campus_id)
                 with open(backup_path, "rb") as f:
                     st.download_button(
                         label="📥 下载数据库备份",

@@ -7,21 +7,29 @@
 def grade_single(question, given_answer):
     """
     判断单道题是否正确。
+    编程题返回 None 表示需人工批改。
 
     参数:
         question: dict，包含 'qtype' 和 'answer' 字段
         given_answer: 学生的答案 (str)
 
     返回:
-        bool: 是否正确
+        bool | None: 是否正确；编程题返回 None
     """
     if not given_answer:
+        # 编程题未作答也返回 None
+        if question.get("qtype") == "编程":
+            return None
         return False
 
     # 标准化比较：去除首尾空格
     qtype = question.get("qtype", "")
     correct = question.get("answer", "").strip()
     student = given_answer.strip()
+
+    # 编程题：不自动判分，返回 None 表示需人工批改
+    if qtype == "编程":
+        return None
 
     # 判断题：统一处理 "对"/"正确"/"True" → 对, "错"/"错误"/"False" → 错
     if qtype == "判断":
@@ -33,7 +41,7 @@ def grade_single(question, given_answer):
 
 def grade_all(questions, answers_dict):
     """
-    批改所有题目。
+    批改所有题目。编程题不计入总分。
 
     参数:
         questions: 题目列表，每项含 id, qtype, answer, question, explanation 等
@@ -41,13 +49,13 @@ def grade_all(questions, answers_dict):
 
     返回:
         dict: {
-            "score": 得分,
-            "total": 总题数,
+            "score": 得分（不含编程题）,
+            "total": 可自动评分的题目总数（不含编程题）,
             "results": [
                 {
                     "question": {...},
                     "given_answer": 学生答案,
-                    "is_correct": True/False
+                    "is_correct": True/False/None (None=编程题待批改)
                 },
                 ...
             ]
@@ -55,14 +63,13 @@ def grade_all(questions, answers_dict):
     """
     results = []
     score = 0
-    total = len(questions)
 
     for q in questions:
         qid = q["id"]
         given = answers_dict.get(qid, "")
         is_correct = grade_single(q, given)
 
-        if is_correct:
+        if is_correct is True:
             score += 1
 
         results.append({
@@ -70,6 +77,9 @@ def grade_all(questions, answers_dict):
             "given_answer": given,
             "is_correct": is_correct,
         })
+
+    # total 只统计可自动评分的题目（排除编程题）
+    total = sum(1 for q in questions if q.get("qtype") != "编程")
 
     return {
         "score": score,

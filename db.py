@@ -866,14 +866,32 @@ def _is_turso():
     return bool(TURSO_URL and TURSO_TOKEN)
 
 
-def ensure_local_backup():
+def get_answers_by_attempt(attempt_id):
+    """获取某次考试的所有答案（用于恢复考试）。
+    返回 dict {question_id: given_answer}"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT question_id, given_answer FROM answers WHERE attempt_id = ? AND phase = 'first'",
+        (attempt_id,)
+    ).fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        qid = r["question_id"] if isinstance(r, dict) else r[0]
+        ans = r["given_answer"] if isinstance(r, dict) else r[1]
+        result[qid] = ans or ""
+    return result
+
+
+def ensure_local_backup(campus_id=None):
     """确保本地存在 SQLite 备份文件。
     如果使用 Turso 云数据库，将所有数据导出到本地 SQLite。
     如果使用本地 SQLite，直接返回已有文件路径。
+    campus_id: 非 None 时只导出该校区数据（校区管理员用）。
     返回本地 SQLite 文件的路径。"""
     import sqlite3
 
-    # 本地 SQLite 模式：文件已存在，直接返回
+    # 本地 SQLite 模式：文件已存在，直接返回（校区过滤不适用于本地文件）
     if os.path.exists(DB_PATH):
         return DB_PATH
 
@@ -956,12 +974,25 @@ def ensure_local_backup():
         );
     """)
 
-    # 按依赖顺序导出数据
-    tables = ['campuses', 'users', 'question_banks', 'questions',
-              'exam_attempts', 'answers', 'upload_logs']
-    for table in tables:
+    # 按依赖顺序导出数据（校区管理员只导出本校数据）
+    tables = [
+        ('campuses', f"SELECT * FROM campuses{' WHERE id = ' + str(campus_id) if campus_id else ''}"),
+        ('users', f"SELECT * FROM users{' WHERE campus_id = ' + str(campus_id) if campus_id else ''}"),
+        ('question_banks', f"SELECT * FROM question_banks{' WHERE campus_id = ' + str(campus_id) if campus_id else ''}"),
+        ('questions',
+         f"SELECT q.* FROM questions q JOIN question_banks qb ON q.bank_id = qb.id"
+         f"{' WHERE qb.campus_id = ' + str(campus_id) if campus_id else ''}"),
+        ('exam_attempts',
+         f"SELECT ea.* FROM exam_attempts ea JOIN users u ON ea.user_id = u.id"
+         f"{' WHERE u.campus_id = ' + str(campus_id) if campus_id else ''}"),
+        ('answers',
+         f"SELECT a.* FROM answers a JOIN exam_attempts ea ON a.attempt_id = ea.id JOIN users u ON ea.user_id = u.id"
+         f"{' WHERE u.campus_id = ' + str(campus_id) if campus_id else ''}"),
+        ('upload_logs', f"SELECT * FROM upload_logs{' WHERE campus_id = ' + str(campus_id) if campus_id else ''}"),
+    ]
+    for table, query in tables:
         try:
-            rows = src.execute(f"SELECT * FROM {table}").fetchall()
+            rows = src.execute(query).fetchall()
             if rows:
                 cols = list(rows[0].keys())
                 placeholders = ','.join(['?' for _ in cols])
