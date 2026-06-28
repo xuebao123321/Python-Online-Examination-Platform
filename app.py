@@ -734,7 +734,10 @@ def page_student_results():
         if detail:
             result = {"score": detail["score"], "total": detail["total"], "results": [
                 {"question": a, "given_answer": a["given_answer"],
-                 "is_correct": None if a.get("qtype") == "编程" else bool(a["is_correct"])}
+                 "is_correct": (
+                     None if (a.get("qtype") == "编程" and a.get("phase") != "review")
+                     else bool(a["is_correct"])
+                 )}
                 for a in detail["answers"]
             ]}
             time_sec = detail.get("time_sec", 0)
@@ -1159,6 +1162,17 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
             if q["qtype"] == "编程":
                 if given:
                     st.code(given, language="python")
+                # 显示批改结果
+                review_comment = q.get("review_answer", "")
+                if q.get("phase") == "review":
+                    if r["is_correct"]:
+                        st.success("✅ 已通过（管理员已批改）")
+                    else:
+                        st.error("❌ 未通过（管理员已批改）")
+                    if review_comment:
+                        st.info(f"💬 评语：{review_comment}")
+                else:
+                    st.info("📝 待管理员批改")
                 if q.get("explanation") and is_admin:
                     st.markdown("💡 解析/参考代码：")
                     st.code(q['explanation'], language="python")
@@ -1348,7 +1362,17 @@ def page_student_wrong():
                     st.code(code, language="python")
                 else:
                     st.caption("（未作答）")
-                st.info("📝 编程题需人工批改")
+                # 批改状态
+                if q.get("phase") == "review":
+                    if q.get("is_correct") == 1:
+                        st.success("✅ 已通过（管理员已批改）")
+                    else:
+                        st.error("❌ 未通过（管理员已批改）")
+                    comment = q.get("review_answer", "")
+                    if comment:
+                        st.info(f"💬 评语：{comment}")
+                else:
+                    st.info("📝 待管理员批改")
 
             # 错误原因
             error_reason = q.get("error_reason", "")
@@ -1637,6 +1661,103 @@ def _do_import(bank_id, questions, bank_name, user=None, filename=""):
 
 
 # ==================== 管理员：仪表盘 ====================
+
+def page_admin_programming_review():
+    """管理员：编程题人工批改页面"""
+    st.title("💻 编程题批改")
+    user = st.session_state.user
+    is_super = user['role'] == 'admin' and user.get('campus_id') is None
+    campus_id = None if is_super else user.get('campus_id')
+
+    # 顶部筛选
+    filter_options = ["⏳ 待批改", "✅ 已批改", "📋 全部"]
+    chosen = st.radio("筛选", filter_options, horizontal=True, key="prog_filter")
+    status_map = {"⏳ 待批改": "pending", "✅ 已批改": "graded", "📋 全部": "all"}
+    status_filter = status_map[chosen]
+
+    total = db.get_programming_answers_count(campus_id, status_filter)
+    if total == 0:
+        st.info("暂无编程题记录。" if status_filter != "pending" else "🎉 没有待批改的编程题！")
+        return
+
+    st.caption(f"共 {total} 条记录")
+    st.divider()
+
+    page_key = "prog_review_page"
+    page = st.session_state.get(page_key, 0)
+    answers = db.get_programming_answers(campus_id, status_filter, limit=PAGE_SIZE, offset=page * PAGE_SIZE)
+
+    for ans in answers:
+        is_pending = ans.get("phase") == "first"
+        is_passed = ans.get("is_correct") == 1
+
+        # 状态标签
+        if is_pending:
+            status_badge = "⏳ 待批改"
+            status_color = "orange"
+        elif is_passed:
+            status_badge = "✅ 已通过"
+            status_color = "green"
+        else:
+            status_badge = "❌ 未通过"
+            status_color = "red"
+
+        expander_title = f":{status_color}[{status_badge}] {ans['user_name']} — {ans['bank_name']} — {ans.get('submitted_at', '')}"
+
+        with st.expander(expander_title):
+            # 题目和代码
+            st.markdown(f"**📝 题目：** {clean_text(ans.get('question_text', ''))}")
+            st.markdown("**💻 学生代码：**")
+            code = ans.get("student_code") or "# 未作答"
+            st.code(code, language="python")
+
+            # 批改或已批改结果
+            if is_pending:
+                st.divider()
+                st.markdown("##### 🔧 批改")
+                c1, c2 = st.columns(2)
+                with c1:
+                    review_status = st.radio("判定", ["✅ 通过", "❌ 不通过"],
+                                             key=f"prog_status_{ans['answer_id']}", horizontal=True)
+                with c2:
+                    review_comment = st.text_area("评语（可选）", key=f"prog_comment_{ans['answer_id']}",
+                                                  placeholder="给学生留言...", height=68)
+
+                if st.button("💾 保存批改", key=f"prog_save_{ans['answer_id']}", use_container_width=True, type="primary"):
+                    status = "passed" if review_status == "✅ 通过" else "failed"
+                    db.save_programming_review(ans["answer_id"], status, review_comment)
+                    log_operation("批改编程题",
+                                  f"{ans['user_name']} / {ans['bank_name']}",
+                                  f"判定: {review_status}")
+                    st.success(f"✅ 已保存！{'通过' if status == 'passed' else '未通过'}")
+                    time.sleep(0.5)
+                    st.rerun()
+            else:
+                # 已批改，显示结果
+                comment = ans.get("review_comment", "")
+                if is_passed:
+                    st.success("✅ 已判定通过")
+                else:
+                    st.error("❌ 已判定不通过")
+                if comment:
+                    st.info(f"💬 评语：{comment}")
+
+                # 允许重新批改
+                if st.button("🔄 重新批改", key=f"prog_redo_{ans['answer_id']}"):
+                    # 把状态改回 pending
+                    conn = db.get_conn()
+                    conn.execute(
+                        "UPDATE answers SET phase = 'first', is_correct = 0, review_answer = NULL WHERE id = ?",
+                        (ans["answer_id"],)
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+
+        st.divider()
+
+    pagination_bar(page_key, total)
+
 
 def page_admin_dashboard():
     st.title("📊 管理员仪表盘")
@@ -2117,15 +2238,21 @@ def main():
 
         # 导航菜单按角色
         if is_super_admin:
-            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "🔧 用户管理", "📊 考试结果", "📤 上传题库", "📋 上传日志", "📜 全部记录"]
+            pages = ["📊 仪表盘", "🏫 校区管理", "👥 学生管理", "🔧 用户管理", "💻 编程批改", "📊 考试结果", "📤 上传题库", "📋 上传日志", "📜 全部记录"]
         elif is_admin:
-            pages = ["📊 仪表盘", "👥 学生管理", "📊 考试结果", "📤 上传题库", "📜 全部记录"]
+            pages = ["📊 仪表盘", "👥 学生管理", "💻 编程批改", "📊 考试结果", "📤 上传题库", "📜 全部记录"]
         else:
             pages = ["📝 参加考试", "📊 考试结果", "📜 历史记录", "❌ 错题本"]
 
         current_page = st.radio("导航菜单", pages,
                                 index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
                                 label_visibility="collapsed")
+
+        # 编程批改红点提示
+        if is_admin and "💻 编程批改" in pages:
+            pending = db.get_programming_pending_count(campus_id if not is_super_admin else None)
+            if pending > 0:
+                st.markdown(f"🔴 **{pending}** 道编程题待批改 → 「💻 编程批改」")
 
         if current_page != st.session_state.page:
             if st.session_state.exam_state == "in_progress" and not is_admin:
@@ -2238,6 +2365,8 @@ def main():
         page_admin_campuses()
     elif page == "📜 全部记录":
         page_admin_records()
+    elif page == "💻 编程批改":
+        page_admin_programming_review()
 
 
 if __name__ == "__main__":

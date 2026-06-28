@@ -868,6 +868,137 @@ def get_attempts_with_review_stats(user_id, limit=None, offset=0):
     return [dict(r) for r in rows]
 
 
+# ==================== 编程题批改 ====================
+
+def get_programming_answers(campus_id=None, status_filter='all', limit=20, offset=0):
+    """获取编程题作答列表（管理端批改用）。
+    status_filter: 'pending' | 'graded' | 'all'
+    返回 [{answer_id, attempt_id, user_id, user_name, username, bank_name,
+           submitted_at, question_id, question_text, student_code,
+           is_correct, review_comment, ...}]"""
+    conn = get_conn()
+    conditions = ["q.qtype = '编程'"]
+    params = []
+
+    if campus_id:
+        conditions.append("u.campus_id = ?")
+        params.append(campus_id)
+
+    if status_filter == 'pending':
+        conditions.append("a.phase = 'first'")
+    elif status_filter == 'graded':
+        conditions.append("a.phase = 'review'")
+
+    where = " AND ".join(conditions)
+    sql = f"""SELECT a.id as answer_id, a.attempt_id, a.question_id, a.given_answer as student_code,
+                     a.is_correct, a.phase, a.review_answer as review_comment,
+                     ea.user_id, ea.submitted_at,
+                     u.display_name as user_name, u.username,
+                     qb.name as bank_name,
+                     q.question as question_text
+              FROM answers a
+              JOIN exam_attempts ea ON a.attempt_id = ea.id
+              JOIN users u ON ea.user_id = u.id
+              JOIN question_banks qb ON ea.bank_id = qb.id
+              JOIN questions q ON a.question_id = q.id
+              WHERE {where} AND ea.submitted_at IS NOT NULL
+              ORDER BY CASE WHEN a.phase = 'first' THEN 0 ELSE 1 END,
+                       ea.submitted_at DESC
+              LIMIT ? OFFSET ?"""
+    params.extend([limit, offset])
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_programming_answers_count(campus_id=None, status_filter='all'):
+    """获取编程题作答总数（用于分页）"""
+    conn = get_conn()
+    conditions = ["q.qtype = '编程'"]
+    params = []
+
+    if campus_id:
+        conditions.append("u.campus_id = ?")
+        params.append(campus_id)
+
+    if status_filter == 'pending':
+        conditions.append("a.phase = 'first'")
+    elif status_filter == 'graded':
+        conditions.append("a.phase = 'review'")
+
+    where = " AND ".join(conditions)
+    row = conn.execute(f"""SELECT COUNT(*) as cnt
+              FROM answers a
+              JOIN exam_attempts ea ON a.attempt_id = ea.id
+              JOIN users u ON ea.user_id = u.id
+              JOIN questions q ON a.question_id = q.id
+              WHERE {where} AND ea.submitted_at IS NOT NULL""", params).fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
+
+
+def save_programming_review(answer_id, status, comment=""):
+    """保存编程题批改结果。status: 'passed' | 'failed'"""
+    conn = get_conn()
+    is_correct = 1 if status == 'passed' else 0
+    conn.execute(
+        """UPDATE answers SET is_correct = ?, review_answer = ?, phase = 'review'
+           WHERE id = ?""",
+        (is_correct, comment, answer_id)
+    )
+
+    # 重新计算该 attempt 的总分
+    row = conn.execute(
+        "SELECT attempt_id FROM answers WHERE id = ?", (answer_id,)
+    ).fetchone()
+    if row:
+        attempt_id = row["attempt_id"]
+        # 统计所有 is_correct=1 的答案数（含编程题和非编程题）
+        score_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM answers WHERE attempt_id = ? AND is_correct = 1",
+            (attempt_id,)
+        ).fetchone()
+        new_score = int(score_row["cnt"]) if score_row else 0
+        # total 也更新为全部题目数（含编程题）
+        total_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM answers WHERE attempt_id = ?",
+            (attempt_id,)
+        ).fetchone()
+        new_total = int(total_row["cnt"]) if total_row else 0
+        conn.execute(
+            "UPDATE exam_attempts SET score = ?, total = ? WHERE id = ?",
+            (new_score, new_total, attempt_id)
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def get_programming_pending_count(campus_id=None):
+    """获取待批改的编程题数量"""
+    conn = get_conn()
+    if campus_id:
+        row = conn.execute("""SELECT COUNT(*) as cnt
+            FROM answers a
+            JOIN exam_attempts ea ON a.attempt_id = ea.id
+            JOIN users u ON ea.user_id = u.id
+            JOIN questions q ON a.question_id = q.id
+            WHERE q.qtype = '编程' AND a.phase = 'first'
+              AND u.campus_id = ? AND ea.submitted_at IS NOT NULL""",
+            (campus_id,)).fetchone()
+    else:
+        row = conn.execute("""SELECT COUNT(*) as cnt
+            FROM answers a
+            JOIN exam_attempts ea ON a.attempt_id = ea.id
+            JOIN questions q ON a.question_id = q.id
+            WHERE q.qtype = '编程' AND a.phase = 'first'
+              AND ea.submitted_at IS NOT NULL""").fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
+
+
+# ==================== 错题本 ====================
+
 def get_wrong_questions(user_id, limit=None, offset=0):
     """获取某用户的错题列表（含订正状态）。支持分页。
     返回每道题的最新状态：曾做错过的题目，包含是否已订正正确的标记。"""
