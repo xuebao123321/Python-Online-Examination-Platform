@@ -738,7 +738,8 @@ def page_student_results():
                 for a in detail["answers"]
             ]}
             time_sec = detail.get("time_sec", 0)
-            _render_result_full(result, time_sec, detail.get("bank_name", ""), detail.get("submitted_at", ""), is_admin_view)
+            _render_result_full(result, time_sec, detail.get("bank_name", ""), detail.get("submitted_at", ""), is_admin_view,
+                               attempt_id=st.session_state.review_attempt_id)
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("🔄 重新考试", use_container_width=True, type="primary"):
@@ -765,7 +766,8 @@ def page_student_results():
 
     # ---- 已订正完成 / 管理员查看 ----
     if exam_state == "reviewed" or is_admin_view:
-        _render_result_full(result, time_sec, is_admin=is_admin_view)
+        _render_result_full(result, time_sec, is_admin=is_admin_view,
+                           attempt_id=st.session_state.get("review_attempt_id") or st.session_state.get("attempt_id"))
         c1, c2 = st.columns(2)
         with c1:
             if st.button("🔄 重新考试", use_container_width=True, type="primary"):
@@ -792,9 +794,17 @@ def page_student_results():
 
     st.divider()
     st.subheader("📋 答题情况")
-    st.info("💡 提交后暂不显示答案和解析。请先完成错题订正，订正后将解锁全部解析。")
 
-    wrong_count = 0
+    # 先统计错题数
+    wrong_count = sum(1 for r in result["results"] if r["is_correct"] is False)
+
+    if wrong_count >= 5:
+        st.info(f"📚 有 {wrong_count} 道错题，建议逐题订正，掌握知识点后再查看解析")
+    elif wrong_count >= 1:
+        st.info(f"💪 只有 {wrong_count} 道错题，花几分钟订正就能解锁全部解析！")
+    else:
+        st.info("🎉 全部正确！太棒了！")
+
     for i, r in enumerate(result["results"]):
         # 编程题显示 📝，答对 ✅，答错 ❌
         if r["is_correct"] is None:
@@ -826,7 +836,8 @@ def page_student_results():
     c1, c2 = st.columns(2)
     with c1:
         if wrong_count > 0:
-            if st.button(f"📝 错题订正（{wrong_count}题）", type="primary", use_container_width=True):
+            btn_text = f"📝 订正错题，解锁解析（仅{wrong_count}题）" if wrong_count < 5 else f"📝 开始错题订正（{wrong_count}题）"
+            if st.button(btn_text, type="primary", use_container_width=True):
                 st.session_state.exam_state = "reviewing"
                 st.session_state.review_idx = 0
                 st.rerun()
@@ -1018,7 +1029,7 @@ def _submit_review(wrong_answers):
     st.rerun()
 
 
-def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admin=False):
+def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admin=False, attempt_id=None):
     """渲染完整结果。管理员始终可见全部解析。"""
     if not result:
         st.info("暂无考试结果数据")
@@ -1026,21 +1037,86 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
     score, total = result["score"], result["total"]
     percentage = round(score / total * 100, 1) if total > 0 else 0
 
-    emoji = "🏆" if percentage >= 90 else ("👍" if percentage >= 75 else ("💪" if percentage >= 60 else "📚"))
-    comment = "非常棒！" if percentage >= 90 else ("做得不错！" if percentage >= 75 else ("继续加油！" if percentage >= 60 else "别灰心！"))
+    # ---------- 📊 考试报告卡片 ----------
+    review_stats = None
+    if attempt_id:
+        try:
+            review_stats = db.get_attempt_review_stats(attempt_id)
+        except Exception:
+            pass  # 数据库查询失败时优雅降级
 
-    st.markdown(f"## {emoji} {comment}")
-    if bank_name:
-        st.caption(f"考试：{bank_name} ｜ {submitted_at}")
+    if review_stats:
+        wrong_count = review_stats["wrong_count"]
+        corrected_count = review_stats["corrected_count"]
+        uncorrected_count = review_stats["uncorrected_count"]
+        original_score = review_stats["original_score"]
+        current_score_val = review_stats["current_score"]
+        error_reasons = review_stats.get("error_reasons", [])
 
-    mc1, mc2, mc3 = st.columns(3)
-    with mc1:
-        st.metric("得分", f"{score} / {total}")
-    with mc2:
-        st.metric("正确率", f"{percentage}%")
-    with mc3:
-        st.metric("用时", format_time(time_sec))
-    st.progress(score / total if total > 0 else 0)
+        # 原始正确率 vs 当前正确率
+        orig_total = total  # total 是首次提交时的非编程题总数
+        orig_pct = round(original_score / orig_total * 100, 1) if orig_total > 0 else 0
+        curr_pct = round(current_score_val / orig_total * 100, 1) if orig_total > 0 else 0
+        improvement = current_score_val - original_score
+
+        with st.container():
+            st.markdown("---")
+            st.subheader("📊 考试报告")
+
+            if bank_name:
+                st.caption(f"{bank_name} ｜ {submitted_at}")
+
+            # 得分对比
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1:
+                st.metric("📝 首次得分", f"{original_score}/{orig_total}", f"{orig_pct}%")
+            with mc2:
+                delta_str = f"+{improvement}题 (+{round(improvement/orig_total*100,1)}%)" if improvement > 0 else None
+                st.metric("🎯 订正后得分", f"{current_score_val}/{orig_total}", f"{curr_pct}%",
+                         delta=delta_str)
+            with mc3:
+                st.metric("⏱️ 用时", format_time(time_sec))
+
+            # 订正进度
+            if wrong_count > 0:
+                st.markdown("---")
+                progress_ratio = corrected_count / wrong_count if wrong_count > 0 else 0
+                if uncorrected_count == 0 and corrected_count > 0:
+                    st.success(f"🎉 订正完成！{wrong_count} 道错题已全部订正通过")
+                elif corrected_count > 0:
+                    st.info(f"📝 订正进度：已通过 {corrected_count}/{wrong_count}，还有 {uncorrected_count} 题待订正")
+                    st.progress(progress_ratio)
+                else:
+                    st.info(f"📝 {wrong_count} 道错题尚未订正")
+            else:
+                st.success("🎉 全部正确，无需订正！")
+
+            # 错因分布
+            if error_reasons:
+                st.markdown("##### 📌 错因分布")
+                total_errors = sum(e["cnt"] for e in error_reasons)
+                for e in error_reasons:
+                    pct_bar = e["cnt"] / total_errors if total_errors > 0 else 0
+                    st.markdown(f"{e['reason']}：{e['cnt']} 次")
+                    st.progress(pct_bar)
+
+    else:
+        # 无订正统计时显示简化头部
+        emoji = "🏆" if percentage >= 90 else ("👍" if percentage >= 75 else ("💪" if percentage >= 60 else "📚"))
+        comment = "非常棒！" if percentage >= 90 else ("做得不错！" if percentage >= 75 else ("继续加油！" if percentage >= 60 else "别灰心！"))
+
+        st.markdown(f"## {emoji} {comment}")
+        if bank_name:
+            st.caption(f"考试：{bank_name} ｜ {submitted_at}")
+
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
+            st.metric("得分", f"{score} / {total}")
+        with mc2:
+            st.metric("正确率", f"{percentage}%")
+        with mc3:
+            st.metric("用时", format_time(time_sec))
+        st.progress(score / total if total > 0 else 0)
     st.divider()
 
     st.subheader("📋 逐题回顾")
