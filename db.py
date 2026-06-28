@@ -192,29 +192,43 @@ def create_upload_log(user_id, campus_id, filename, file_size, question_count, b
     conn.close()
 
 
-def get_upload_logs(campus_id=None, limit=200):
-    """获取上传日志（超管可看全部，校区管理员只看本校）"""
+def get_upload_logs(campus_id=None, limit=None, offset=0):
+    """获取上传日志（超管可看全部，校区管理员只看本校）。支持分页。"""
     conn = get_conn()
+    params = []
     if campus_id:
-        rows = conn.execute(
-            """SELECT ul.*, u.display_name as uploader_name, u.username
+        sql = """SELECT ul.*, u.display_name as uploader_name, u.username
                FROM upload_logs ul
                JOIN users u ON ul.user_id = u.id
                WHERE ul.campus_id = ?
-               ORDER BY ul.uploaded_at DESC LIMIT ?""",
-            (campus_id, limit)
-        ).fetchall()
+               ORDER BY ul.uploaded_at DESC"""
+        params = [campus_id]
     else:
-        rows = conn.execute(
-            """SELECT ul.*, u.display_name as uploader_name, u.username, c.name as campus_name
+        sql = """SELECT ul.*, u.display_name as uploader_name, u.username, c.name as campus_name
                FROM upload_logs ul
                JOIN users u ON ul.user_id = u.id
                LEFT JOIN campuses c ON ul.campus_id = c.id
-               ORDER BY ul.uploaded_at DESC LIMIT ?""",
-            (limit,)
-        ).fetchall()
+               ORDER BY ul.uploaded_at DESC"""
+        params = []
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_upload_logs_count(campus_id=None):
+    """获取上传日志总数（用于分页）"""
+    conn = get_conn()
+    if campus_id:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM upload_logs WHERE campus_id = ?", (campus_id,)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM upload_logs").fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
 
 
 # ==================== 用户操作 ====================
@@ -316,20 +330,45 @@ def delete_campus(campus_id):
     conn.close()
 
 
-def get_all_students(campus_id=None):
-    """获取学生用户。campus_id=None 返回全部"""
+def get_all_students(campus_id=None, limit=None, offset=0, search=None):
+    """获取学生用户。campus_id=None 返回全部。
+    支持分页(limit/offset)和模糊搜索(search)。"""
     conn = get_conn()
+    conditions = ["role = 'student'"]
+    params = []
     if campus_id:
-        rows = conn.execute(
-            "SELECT * FROM users WHERE role = 'student' AND campus_id = ? ORDER BY created_at DESC",
-            (campus_id,)
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM users WHERE role = 'student' ORDER BY created_at DESC"
-        ).fetchall()
+        conditions.append("campus_id = ?")
+        params.append(campus_id)
+    if search:
+        conditions.append("(display_name LIKE ? OR username LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    where = " AND ".join(conditions)
+    sql = f"SELECT * FROM users WHERE {where} ORDER BY created_at DESC"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_all_students_count(campus_id=None, search=None):
+    """获取学生总数（用于分页）"""
+    conn = get_conn()
+    conditions = ["role = 'student'"]
+    params = []
+    if campus_id:
+        conditions.append("campus_id = ?")
+        params.append(campus_id)
+    if search:
+        conditions.append("(display_name LIKE ? OR username LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    where = " AND ".join(conditions)
+    row = conn.execute(f"SELECT COUNT(*) as cnt FROM users WHERE {where}", params).fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
 
 
 def get_all_users(campus_id=None):
@@ -558,6 +597,20 @@ def insert_questions_batch(bank_id, questions_list):
     conn.close()
 
 
+def update_question(question_id, **fields):
+    """更新单道题目。fields 可包含 question, option_a, option_b, option_c, option_d, answer, explanation。"""
+    allowed = ['question', 'option_a', 'option_b', 'option_c', 'option_d', 'answer', 'explanation']
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    set_clause = ', '.join([f"{k} = ?" for k in updates])
+    values = list(updates.values()) + [question_id]
+    conn = get_conn()
+    conn.execute(f"UPDATE questions SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
+
 def get_questions(bank_id):
     """获取某个题库的所有题目，按序号排序"""
     conn = get_conn()
@@ -627,57 +680,96 @@ def abandon_attempt(attempt_id):
     conn.close()
 
 
-def get_attempts(user_id=None, campus_id=None):
-    """获取考试记录。支持按用户或校区过滤"""
+def get_attempts(user_id=None, campus_id=None, limit=None, offset=0):
+    """获取考试记录。支持按用户或校区过滤，支持分页。"""
     conn = get_conn()
+    params = []
     if user_id:
-        rows = conn.execute(
-            """SELECT ea.*, qb.name as bank_name, qb.level, qb.year
+        sql = """SELECT ea.*, qb.name as bank_name, qb.level, qb.year
                FROM exam_attempts ea
                JOIN question_banks qb ON ea.bank_id = qb.id
                WHERE ea.submitted_at IS NOT NULL AND ea.user_id = ?
-               ORDER BY ea.submitted_at DESC""",
-            (user_id,)
-        ).fetchall()
+               ORDER BY ea.submitted_at DESC"""
+        params = [user_id]
     elif campus_id:
-        rows = conn.execute(
-            """SELECT ea.*, qb.name as bank_name, qb.level, qb.year, u.display_name as user_name
+        sql = """SELECT ea.*, qb.name as bank_name, qb.level, qb.year, u.display_name as user_name
                FROM exam_attempts ea
                JOIN question_banks qb ON ea.bank_id = qb.id
                JOIN users u ON ea.user_id = u.id
                WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?
-               ORDER BY ea.submitted_at DESC""",
-            (campus_id,)
-        ).fetchall()
+               ORDER BY ea.submitted_at DESC"""
+        params = [campus_id]
     else:
-        rows = conn.execute(
-            """SELECT ea.*, qb.name as bank_name, qb.level, qb.year, u.display_name as user_name
+        sql = """SELECT ea.*, qb.name as bank_name, qb.level, qb.year, u.display_name as user_name
                FROM exam_attempts ea
                JOIN question_banks qb ON ea.bank_id = qb.id
                JOIN users u ON ea.user_id = u.id
                WHERE ea.submitted_at IS NOT NULL
                ORDER BY ea.submitted_at DESC"""
-        ).fetchall()
+        params = []
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def get_wrong_questions(user_id, limit=50):
-    """获取某用户的错题列表"""
+def get_attempts_count(user_id=None, campus_id=None):
+    """获取考试记录总数（用于分页）"""
     conn = get_conn()
-    rows = conn.execute(
-        """SELECT DISTINCT q.*, a.given_answer, a.is_correct, a.error_reason, a.phase,
+    if user_id:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM exam_attempts WHERE submitted_at IS NOT NULL AND user_id = ?",
+            (user_id,)
+        ).fetchone()
+    elif campus_id:
+        row = conn.execute(
+            """SELECT COUNT(*) as cnt FROM exam_attempts ea
+               JOIN users u ON ea.user_id = u.id
+               WHERE ea.submitted_at IS NOT NULL AND u.campus_id = ?""",
+            (campus_id,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM exam_attempts WHERE submitted_at IS NOT NULL"
+        ).fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
+
+
+def get_wrong_questions(user_id, limit=None, offset=0):
+    """获取某用户的错题列表。支持分页。"""
+    conn = get_conn()
+    sql = """SELECT DISTINCT q.*, a.given_answer, a.is_correct, a.error_reason, a.phase,
                   ea.submitted_at
            FROM answers a
            JOIN questions q ON a.question_id = q.id
            JOIN exam_attempts ea ON a.attempt_id = ea.id
            WHERE ea.user_id = ? AND a.is_correct = 0
-           ORDER BY ea.submitted_at DESC
-           LIMIT ?""",
-        (user_id, limit)
-    ).fetchall()
+           ORDER BY ea.submitted_at DESC"""
+    params = [user_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_wrong_questions_count(user_id):
+    """获取错题总数（用于分页）"""
+    conn = get_conn()
+    row = conn.execute(
+        """SELECT COUNT(DISTINCT q.id) as cnt
+           FROM answers a
+           JOIN questions q ON a.question_id = q.id
+           JOIN exam_attempts ea ON a.attempt_id = ea.id
+           WHERE ea.user_id = ? AND a.is_correct = 0""",
+        (user_id,)
+    ).fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
 
 
 def get_error_reason_stats(campus_id=None):

@@ -182,6 +182,29 @@ def logout():
     st.rerun()
 
 
+PAGE_SIZE = 20  # 全局每页条数
+
+
+def pagination_bar(page_key, total_items, on_change=None):
+    """通用分页控件。page_key 用于 st.session_state 存储当前页码。"""
+    total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+    current = st.session_state[page_key]
+
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c1:
+        if st.button("← 上一页", key=f"{page_key}_prev", disabled=(current <= 0), use_container_width=True):
+            st.session_state[page_key] = max(0, current - 1)
+            st.rerun()
+    with c2:
+        st.caption(f"第 {current + 1} 页 / 共 {total_pages} 页（{total_items} 条）")
+    with c3:
+        if st.button("下一页 →", key=f"{page_key}_next", disabled=(current >= total_pages - 1), use_container_width=True):
+            st.session_state[page_key] = min(total_pages - 1, current + 1)
+            st.rerun()
+
+
 # ==================== 登录 / 注册页 ====================
 
 def page_login():
@@ -910,15 +933,17 @@ def _render_result_full(result, time_sec, bank_name="", submitted_at="", is_admi
 def page_student_history():
     st.title("📜 历史记录")
     user = st.session_state.user
-    attempts = db.get_attempts(user_id=user['id'])
 
-    if not attempts:
+    total = db.get_attempts_count(user_id=user['id'])
+    if total == 0:
         st.info("还没有考试记录。去「参加考试」完成第一次考试吧！🚀")
         return
 
-    total_exams = len(attempts)
-    avg_pct = round(sum(a["score"] / max(a["total"], 1) * 100 for a in attempts) / total_exams, 1) if total_exams > 0 else 0
-    best_pct = round(max(a["score"] / max(a["total"], 1) * 100 for a in attempts), 1) if total_exams > 0 else 0
+    # 汇总统计使用全部数据（考试总数通常不会太大）
+    all_attempts = db.get_attempts(user_id=user['id'])
+    total_exams = len(all_attempts)
+    avg_pct = round(sum(a["score"] / max(a["total"], 1) * 100 for a in all_attempts) / total_exams, 1) if total_exams > 0 else 0
+    best_pct = round(max(a["score"] / max(a["total"], 1) * 100 for a in all_attempts), 1) if total_exams > 0 else 0
 
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
@@ -928,6 +953,10 @@ def page_student_history():
     with sc3:
         st.metric("最高正确率", f"{best_pct}%")
     st.divider()
+
+    page_key = "history_page"
+    page = st.session_state.get(page_key, 0)
+    attempts = db.get_attempts(user_id=user['id'], limit=PAGE_SIZE, offset=page * PAGE_SIZE)
 
     for a in attempts:
         pct = round(a["score"] / a["total"] * 100, 1) if a["total"] > 0 else 0
@@ -951,20 +980,26 @@ def page_student_history():
                     st.rerun()
             st.divider()
 
+    pagination_bar(page_key, total)
+
 
 # ==================== 学生：错题本 ====================
 
 def page_student_wrong():
     st.title("❌ 错题本")
     user = st.session_state.user
-    wrong_qs = db.get_wrong_questions(user['id'], limit=100)
 
-    if not wrong_qs:
+    total = db.get_wrong_questions_count(user['id'])
+    if total == 0:
         st.success("🎉 太棒了！你没有错题记录。")
         return
 
-    st.markdown(f"共 {len(wrong_qs)} 道错题（去重后），按最近考试时间排列：")
+    st.markdown(f"共 {total} 道错题（去重后），按最近考试时间排列：")
     st.divider()
+
+    page_key = "wrong_page"
+    page = st.session_state.get(page_key, 0)
+    wrong_qs = db.get_wrong_questions(user['id'], limit=PAGE_SIZE, offset=page * PAGE_SIZE)
 
     for i, q in enumerate(wrong_qs):
         icon = "🔵" if q["qtype"] == "单选" else "🟢"
@@ -980,6 +1015,51 @@ def page_student_wrong():
                 st.markdown(f"　正确作答：{q['answer']}")
             if q.get("explanation"):
                 st.info(f"💡 解析：{q['explanation']}")
+
+    pagination_bar(page_key, total)
+
+
+# ==================== 题库预览与编辑 ====================
+
+def _show_question_editor(bank_id, q, qtype_icon=""):
+    """单题展示+编辑。点击编辑后可修改题目字段。"""
+    qid = q['id']
+    edit_key = f"edit_{bank_id}_{qid}"
+    is_editing = st.session_state.get(edit_key, False)
+
+    if not is_editing:
+        # 只读展示
+        st.markdown(f"{qtype_icon} **第{q['seq']}题** — {q['question'][:50]}{'...' if len(q.get('question','')) > 50 else ''} ｜ 答案: `{q['answer']}`")
+        if st.button("✏️ 编辑", key=f"edit_btn_{bank_id}_{qid}"):
+            st.session_state[edit_key] = True
+            st.rerun()
+    else:
+        # 编辑模式
+        with st.container():
+            st.markdown(f"{qtype_icon} **编辑第{q['seq']}题**")
+            new_q = st.text_area("题目", value=q.get('question', ''), key=f"eq_{qid}")
+            new_a = st.text_input("选项A", value=q.get('option_a', ''), key=f"ea_{qid}")
+            new_b = st.text_input("选项B", value=q.get('option_b', ''), key=f"eb_{qid}")
+            new_c = st.text_input("选项C", value=q.get('option_c', ''), key=f"ec_{qid}")
+            new_d = st.text_input("选项D", value=q.get('option_d', ''), key=f"ed_{qid}")
+            new_ans = st.text_input("正确答案", value=q.get('answer', ''), key=f"eans_{qid}")
+            new_exp = st.text_area("解析", value=q.get('explanation', ''), key=f"eexp_{qid}", height=80)
+
+            ce1, ce2 = st.columns(2)
+            with ce1:
+                if st.button("💾 保存修改", key=f"save_{bank_id}_{qid}", use_container_width=True, type="primary"):
+                    db.update_question(qid,
+                        question=new_q, option_a=new_a, option_b=new_b,
+                        option_c=new_c, option_d=new_d, answer=new_ans, explanation=new_exp)
+                    st.session_state[edit_key] = False
+                    st.success("✅ 已保存")
+                    time.sleep(0.5)
+                    st.rerun()
+            with ce2:
+                if st.button("❌ 取消", key=f"cancel_edit_{bank_id}_{qid}", use_container_width=True):
+                    st.session_state[edit_key] = False
+                    st.rerun()
+        st.divider()
 
 
 # ==================== 管理员：上传题库 ====================
@@ -1025,8 +1105,11 @@ def page_admin_upload():
             else:
                 level = level_select
         with sc2:
+            # 动态年份：当前年往前20年到往后1年
+            import datetime as dt_module
+            current_year = dt_module.datetime.now().year
             year_months = []
-            for y in range(2010, 2027):
+            for y in range(current_year - 20, current_year + 2):
                 for m in [3, 6, 9, 12]:
                     year_months.append(f"{y}年{m}月")
             year_months.reverse()
@@ -1093,18 +1176,34 @@ def page_admin_upload():
                 st.markdown(f"{b['name']}  [{count}题]{status}")
                 st.caption(f"上传者: {b.get('uploader_name','?')} ｜ 校区: {b.get('campus_name','?')} ｜ {b['created_at']}")
 
-                # 删除 / 申请删除
-                if is_super:
-                    if st.button("🗑️ 删除", key=f"del_{b['id']}"):
-                        db.delete_bank(b["id"])
-                        st.rerun()
-                else:
-                    if b.get('delete_requested', 0) == 0:
-                        if st.button("📩 申请删除", key=f"req_del_{b['id']}"):
-                            db.request_delete_bank(b['id'])
-                            st.success("已提交删除申请，等待超级管理员审批")
-                            time.sleep(1)
+                btn_col1, btn_col2, btn_col3 = st.columns(3)
+                with btn_col1:
+                    # 删除 / 申请删除
+                    if is_super:
+                        if st.button("🗑️ 删除", key=f"del_{b['id']}", use_container_width=True):
+                            db.delete_bank(b["id"])
                             st.rerun()
+                    else:
+                        if b.get('delete_requested', 0) == 0:
+                            if st.button("📩 申请删除", key=f"req_del_{b['id']}", use_container_width=True):
+                                db.request_delete_bank(b['id'])
+                                st.success("已提交删除申请，等待超级管理员审批")
+                                time.sleep(1)
+                                st.rerun()
+                with btn_col2:
+                    # 预览按钮
+                    preview_key = f"preview_{b['id']}"
+                    if st.button("👁️ 预览", key=preview_key, use_container_width=True):
+                        st.session_state[preview_key] = not st.session_state.get(preview_key, False)
+
+                # 展开预览
+                if st.session_state.get(preview_key, False):
+                    with st.container():
+                        qs = db.get_questions(b["id"])[:10]
+                        for q in qs:
+                            qtype_icon = {'单选': '🔵', '判断': '🟢', '编程': '💻'}.get(q['qtype'], '')
+                            _show_question_editor(b["id"], q, qtype_icon)
+
                 st.divider()
         else:
             st.info("还没有题库")
@@ -1247,11 +1346,24 @@ def page_admin_dashboard():
 
 def page_admin_students():
     st.title("👥 学生管理")
-    students = db.get_all_students(st.session_state.user.get('campus_id'))
 
-    if not students:
-        st.info("还没有注册的学生账号。")
+    # 搜索框
+    search_key = "student_search"
+    search = st.text_input("🔍 搜索学生（用户名或显示名）", key=search_key, placeholder="输入关键词筛选...")
+
+    campus_id = st.session_state.user.get('campus_id')
+    total = db.get_all_students_count(campus_id, search)
+    if total == 0:
+        st.info("没有匹配的学生账号。" if search else "还没有注册的学生账号。")
         return
+
+    page_key = "students_page"
+    if search and st.session_state.get(f"{page_key}_prev_search") != search:
+        st.session_state[page_key] = 0  # 搜索变化时重置到第一页
+    st.session_state[f"{page_key}_prev_search"] = search
+
+    page = st.session_state.get(page_key, 0)
+    students = db.get_all_students(campus_id, limit=PAGE_SIZE, offset=page * PAGE_SIZE, search=search)
 
     for s in students:
         detail = db.get_student_detail(s['id'])
@@ -1277,6 +1389,8 @@ def page_admin_students():
                     st.session_state.page = "👤 学生详情"
                     st.rerun()
             st.divider()
+
+    pagination_bar(page_key, total)
 
 
 def page_admin_student_detail():
@@ -1343,20 +1457,23 @@ def page_admin_student_detail():
 def page_admin_records():
     """管理员查看所有考试记录"""
     st.title("📜 全部考试记录")
-    attempts = db.get_attempts(campus_id=st.session_state.user.get('campus_id'))
+    campus_id = st.session_state.user.get('campus_id')
+    total = db.get_attempts_count(campus_id=campus_id)
 
-    if not attempts:
+    if total == 0:
         st.info("还没有考试记录。")
         return
 
-    total = len(attempts)
-    avg_pct = round(sum(a["score"] / max(a["total"], 1) * 100 for a in attempts) / total, 1) if total > 0 else 0
     mc1, mc2 = st.columns(2)
     with mc1:
         st.metric("总考试次数", total)
     with mc2:
-        st.metric("总平均分", f"{avg_pct}%")
+        st.metric("每页显示", f"{PAGE_SIZE} 条")
     st.divider()
+
+    page_key = "records_page"
+    page = st.session_state.get(page_key, 0)
+    attempts = db.get_attempts(campus_id=campus_id, limit=PAGE_SIZE, offset=page * PAGE_SIZE)
 
     for a in attempts:
         pct = round(a["score"] / a["total"] * 100, 1) if a["total"] > 0 else 0
@@ -1379,6 +1496,8 @@ def page_admin_records():
                     st.session_state.page = "📊 考试结果"
                     st.rerun()
             st.divider()
+
+    pagination_bar(page_key, total)
 
 
 # ==================== 超级管理员：用户管理 ====================
@@ -1439,10 +1558,14 @@ def page_admin_audit_log():
     st.title("📋 上传日志")
     st.caption("记录所有题库上传操作，用于版权溯源")
 
-    logs = db.get_upload_logs()
-    if not logs:
+    total = db.get_upload_logs_count()
+    if total == 0:
         st.info("暂无上传记录")
         return
+
+    page_key = "audit_page"
+    page = st.session_state.get(page_key, 0)
+    logs = db.get_upload_logs(limit=PAGE_SIZE, offset=page * PAGE_SIZE)
 
     data = []
     for l in logs:
@@ -1456,7 +1579,7 @@ def page_admin_audit_log():
             "题目数": l['question_count'],
         })
     st.dataframe(data, use_container_width=True, hide_index=True)
-    st.caption(f"共 {len(logs)} 条上传记录")
+    pagination_bar(page_key, total)
 
 
 def page_admin_campuses():
