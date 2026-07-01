@@ -126,14 +126,15 @@ def parse_csv(file_obj):
                     continue
             else:
                 # 多选题：验证每个答案字母对应的选项都存在
+                valid_opts = True
                 for ch in answer:
                     idx = ord(ch) - ord("A")
                     if not [option_a, option_b, option_c, option_d][idx]:
                         errors.append(f"⚠️ 第 {row_num} 行：正确答案 {ch} 对应的选项为空，已跳过")
+                        valid_opts = False
                         break
-                else:
+                if not valid_opts:
                     continue
-                continue
         elif qtype == "编程":
             # 编程题答案字段存储测试用例或评分标准（可选）
             pass
