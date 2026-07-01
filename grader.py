@@ -36,6 +36,10 @@ def grade_single(question, given_answer):
         student = _normalize_tf_answer(student)
         correct = _normalize_tf_answer(correct)
 
+    # 多选题：排序后比较（"BAC" 等价于 "ABC"）
+    if qtype == "多选":
+        return "".join(sorted(student.upper())) == "".join(sorted(correct.upper()))
+
     return student.upper() == correct.upper()
 
 

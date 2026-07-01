@@ -10,12 +10,15 @@ import io
 REQUIRED_COLUMNS = ["序号", "题型", "题目", "选项A", "选项B", "选项C", "选项D", "正确答案", "解析"]
 
 # 有效的题型
-VALID_QTYPES = ["单选", "判断", "编程"]
+VALID_QTYPES = ["单选", "多选", "判断", "编程"]
 
 # 单选题有效答案
 VALID_CHOICE_ANSWERS = ["A", "B", "C", "D"]
 # 判断题有效答案
 VALID_TF_ANSWERS = ["对", "错"]
+# 多选题有效答案（A-D 字母组合，至少2个）
+import re as _re
+VALID_MULTI_ANSWERS = _re.compile(r'^[A-D]{2,4}$')
 
 
 def parse_csv(file_obj):
@@ -89,12 +92,15 @@ def parse_csv(file_obj):
             continue
 
         if qtype not in VALID_QTYPES:
-            errors.append(f"⚠️ 第 {row_num} 行：题型「{qtype}」无效，应为「单选」或「判断」，已跳过")
+            errors.append(f"⚠️ 第 {row_num} 行：题型「{qtype}」无效，应为「单选」「多选」「判断」或「编程」，已跳过")
             continue
 
         # 验证答案格式
         if qtype == "单选" and answer not in VALID_CHOICE_ANSWERS:
             errors.append(f"⚠️ 第 {row_num} 行：单选题答案「{answer}」无效，应为 A/B/C/D，已跳过")
+            continue
+        elif qtype == "多选" and not VALID_MULTI_ANSWERS.match(answer):
+            errors.append(f"⚠️ 第 {row_num} 行：多选题答案「{answer}」无效，应为 A-D 字母组合（如 AB、ABC），已跳过")
             continue
         elif qtype == "判断" and answer not in VALID_TF_ANSWERS:
             errors.append(f"⚠️ 第 {row_num} 行：判断题答案「{answer}」无效，应为「对」或「错」，已跳过")
@@ -107,15 +113,26 @@ def parse_csv(file_obj):
         option_d = clean_row.get("选项D", "")
         explanation = clean_row.get("解析", "")
 
-        if qtype == "单选":
+        if qtype in ("单选", "多选"):
             filled_options = [o for o in [option_a, option_b, option_c, option_d] if o]
             if len(filled_options) < 2:
-                errors.append(f"⚠️ 第 {row_num} 行：单选题至少需要填写两个选项，已跳过")
+                errors.append(f"⚠️ 第 {row_num} 行：{qtype}题至少需要填写两个选项，已跳过")
                 continue
-            answer_idx = ord(answer) - ord("A")
-            answer_option = [option_a, option_b, option_c, option_d][answer_idx]
-            if not answer_option:
-                errors.append(f"⚠️ 第 {row_num} 行：正确答案 {answer} 对应的选项为空，已跳过")
+            if qtype == "单选":
+                answer_idx = ord(answer) - ord("A")
+                answer_option = [option_a, option_b, option_c, option_d][answer_idx]
+                if not answer_option:
+                    errors.append(f"⚠️ 第 {row_num} 行：正确答案 {answer} 对应的选项为空，已跳过")
+                    continue
+            else:
+                # 多选题：验证每个答案字母对应的选项都存在
+                for ch in answer:
+                    idx = ord(ch) - ord("A")
+                    if not [option_a, option_b, option_c, option_d][idx]:
+                        errors.append(f"⚠️ 第 {row_num} 行：正确答案 {ch} 对应的选项为空，已跳过")
+                        break
+                else:
+                    continue
                 continue
         elif qtype == "编程":
             # 编程题答案字段存储测试用例或评分标准（可选）

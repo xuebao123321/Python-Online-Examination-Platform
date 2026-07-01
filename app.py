@@ -549,7 +549,7 @@ def _start_retry_exam(user_id, retry_type, retry_count, retry_order, selected_id
 
     # 按类型筛选
     if retry_type == "仅单选":
-        all_wrong = [q for q in all_wrong if q.get("qtype") == "单选"]
+        all_wrong = [q for q in all_wrong if q.get("qtype") in ("单选", "多选")]
     elif retry_type == "仅判断":
         all_wrong = [q for q in all_wrong if q.get("qtype") == "判断"]
     else:
@@ -679,6 +679,8 @@ def _show_exam_questions():
     qtype = current_q["qtype"]
     if qtype == "单选":
         qtype_badge = "🔵 单选题"
+    elif qtype == "多选":
+        qtype_badge = "🟠 多选题"
     elif qtype == "判断":
         qtype_badge = "🟢 判断题"
     else:
@@ -701,6 +703,19 @@ def _show_exam_questions():
         selected = st.radio("请选择作答：", choice_labels, index=idx_default, key=f"q_{qid}")
         if selected:
             st.session_state.answers[qid] = choice_map[selected]
+    elif qtype == "多选":
+        st.caption("请选择所有正确的选项（可多选）：")
+        multi_selected = []
+        multi_cols = st.columns(4)
+        for i, (label, key) in enumerate([("A", "option_a"), ("B", "option_b"), ("C", "option_c"), ("D", "option_d")]):
+            if current_q.get(key):
+                with multi_cols[i]:
+                    is_checked = label in current_answer if current_answer else False
+                    if st.checkbox(f"{label}. {current_q[key]}", value=is_checked, key=f"mc_{qid}_{label}"):
+                        multi_selected.append(label)
+        if multi_selected:
+            # 按字母序排序后存储（如 "ABC"），确保与标准答案比较一致
+            st.session_state.answers[qid] = "".join(sorted(multi_selected))
     elif qtype == "判断":
         tf_labels = ["对 ✅", "错 ❌"]
         tf_map = {"对 ✅": "对", "错 ❌": "错"}
@@ -739,6 +754,9 @@ def _show_exam_questions():
         if qtype == "判断":
             # 判断对错（简单比较）
             is_correct = (student_ans == correct_ans)
+        elif qtype == "多选":
+            # 多选：排序后比较（"BAC" 等价于 "ABC"）
+            is_correct = ("".join(sorted(student_ans.upper())) == "".join(sorted(correct_ans.upper())))
         else:
             is_correct = (student_ans.upper() == correct_ans.upper())
         if is_correct:
@@ -1659,7 +1677,7 @@ def page_admin_upload():
     with st.expander("📋 CSV 文件格式说明", expanded=False):
         st.markdown("""
         必需列名： `序号,题型,题目,选项A,选项B,选项C,选项D,正确答案,解析`
-        - 题型：`单选` / `判断` / `编程`
+        - 题型：`单选` / `多选` / `判断` / `编程`
         - 正确作答：单选填 A/B/C/D，判断填 对/错，编程题留空或填参考代码
         - 解析：编程题可填解题思路或参考代码
         - 文件编码：UTF-8
